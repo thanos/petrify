@@ -479,16 +479,22 @@ impl Petrifier {
     }
 
     fn update_path_to_webp(original_path: &str) -> Result<String> {
-        let path = std::path::Path::new(original_path);
+        let normalized = original_path.replace('\\', "/");
+        let path = std::path::Path::new(&normalized);
         if let Some(stem) = path.file_stem() {
+            let webp_filename = format!("{}.webp", stem.to_string_lossy());
             if let Some(parent) = path.parent() {
-                let webp_filename = format!("{}.webp", stem.to_string_lossy());
-                Ok(parent.join(webp_filename).to_string_lossy().to_string())
+                let parent = parent.to_string_lossy();
+                if parent.is_empty() || parent == "." {
+                    Ok(webp_filename)
+                } else {
+                    Ok(format!("{}/{}", parent, webp_filename))
+                }
             } else {
-                Ok(format!("{}.webp", stem.to_string_lossy()))
+                Ok(webp_filename)
             }
         } else {
-            Ok(original_path.to_string())
+            Ok(normalized)
         }
     }
 
