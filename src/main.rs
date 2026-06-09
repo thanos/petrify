@@ -21,7 +21,11 @@ struct Cli {
     max_pages: usize,
 
     /// Download only specific resource types
-    #[arg(long, value_delimiter = ',', default_value = "js,css,images,video,html,pdf")]
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "js,css,images,video,html,pdf"
+    )]
     download_only: Vec<String>,
 
     /// Maximum concurrent workers

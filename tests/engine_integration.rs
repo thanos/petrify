@@ -15,8 +15,7 @@ const INDEX_HTML: &str = r#"<!DOCTYPE html>
 </body>
 </html>"#;
 
-const ABOUT_HTML: &str =
-    r#"<!DOCTYPE html><html><body><p>About</p><link rel="stylesheet" href="style.css"></body></html>"#;
+const ABOUT_HTML: &str = r#"<!DOCTYPE html><html><body><p>About</p><link rel="stylesheet" href="style.css"></body></html>"#;
 
 fn tiny_png() -> Vec<u8> {
     let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 128, 255, 255]));

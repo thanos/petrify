@@ -126,13 +126,20 @@ impl HtmlParser {
     fn is_url_attribute(&self, attr_name: &str) -> bool {
         matches!(
             attr_name,
-            "src" | "href" | "data-src" | "data-original" | "poster" | "background" | "data-srcset" | "data-lazy-src"
+            "src"
+                | "href"
+                | "data-src"
+                | "data-original"
+                | "poster"
+                | "background"
+                | "data-srcset"
+                | "data-lazy-src"
         )
     }
 
     fn extract_urls_from_text(&self, text: &str) -> Option<Vec<String>> {
         let mut urls = Vec::new();
-        
+
         // Extract URLs from CSS @import statements
         let import_regex = Regex::new(r#"@import\s+["']([^"']+)["']"#).ok()?;
         for cap in import_regex.captures_iter(text) {
@@ -181,7 +188,7 @@ impl HtmlParser {
     fn create_resource(&self, url: &Url) -> Result<Resource> {
         let resource_type = self.determine_resource_type(url);
         let local_path = self.generate_local_path(url, &resource_type)?;
-        
+
         Ok(Resource {
             url: url.clone(),
             local_path,
@@ -201,7 +208,9 @@ impl HtmlParser {
             "html" | "htm" => ResourceType::HTML,
             "css" => ResourceType::CSS,
             "js" | "javascript" => ResourceType::JavaScript,
-            "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "ico" | "bmp" | "tiff" | "tif" => ResourceType::Image,
+            "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "ico" | "bmp" | "tiff" | "tif" => {
+                ResourceType::Image
+            }
             "mp4" | "webm" | "ogg" | "avi" | "mov" | "m4v" => ResourceType::Video,
             "pdf" => ResourceType::PDF,
             "woff" | "woff2" | "ttf" | "otf" | "eot" => ResourceType::Font,
@@ -221,20 +230,20 @@ impl HtmlParser {
         if path.is_empty() || path == "/" {
             return false;
         }
-        
+
         // Check if the path ends with a slash (directory-like)
         if path.ends_with('/') {
             return true;
         }
-        
+
         // Check if the path looks like a content page (not a file)
         let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        
+
         // If it's a single segment without extension, likely a page
         if segments.len() == 1 && !segments[0].contains('.') {
             return true;
         }
-        
+
         // If it's multiple segments and the last one doesn't have an extension, likely a page
         if segments.len() > 1 {
             let last_segment = segments.last().unwrap_or(&"");
@@ -242,15 +251,15 @@ impl HtmlParser {
                 return true;
             }
         }
-        
+
         false
     }
 
     fn generate_local_path(&self, url: &Url, resource_type: &ResourceType) -> Result<String> {
         let path = url.path();
-        
+
         let subdirectory = match resource_type {
-            ResourceType::HTML => "",  // HTML files maintain original structure
+            ResourceType::HTML => "", // HTML files maintain original structure
             ResourceType::CSS => "static/css",
             ResourceType::JavaScript => "static/js",
             ResourceType::Image => "static/images",
@@ -263,28 +272,34 @@ impl HtmlParser {
         // For HTML files, preserve the original directory structure
         if *resource_type == ResourceType::HTML {
             let path_segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-            
+
             if path_segments.is_empty() || path == "/" {
                 // Root page
                 return Ok(format!("{}/index.html", self.output_dir));
             } else {
                 // Create directory structure matching the original URL
-                let dir_path = path_segments[..path_segments.len()-1].join("/");
+                let dir_path = path_segments[..path_segments.len() - 1].join("/");
                 let filename = path_segments.last().unwrap_or(&"index");
-                
+
                 // Handle trailing slash (directory-like URLs)
                 if path.ends_with('/') {
                     if dir_path.is_empty() {
                         return Ok(format!("{}/{}/index.html", self.output_dir, filename));
                     } else {
-                        return Ok(format!("{}/{}/{}/index.html", self.output_dir, dir_path, filename));
+                        return Ok(format!(
+                            "{}/{}/{}/index.html",
+                            self.output_dir, dir_path, filename
+                        ));
                     }
                 } else {
                     // Regular file path
                     if dir_path.is_empty() {
                         return Ok(format!("{}/{}.html", self.output_dir, filename));
                     } else {
-                        return Ok(format!("{}/{}/{}.html", self.output_dir, dir_path, filename));
+                        return Ok(format!(
+                            "{}/{}/{}.html",
+                            self.output_dir, dir_path, filename
+                        ));
                     }
                 }
             }
@@ -303,7 +318,10 @@ impl HtmlParser {
             }
         }
 
-        Ok(format!("{}/{}/{}", self.output_dir, subdirectory, unique_filename))
+        Ok(format!(
+            "{}/{}/{}",
+            self.output_dir, subdirectory, unique_filename
+        ))
     }
 
     fn guess_mime_type(&self, url: &Url, resource_type: &ResourceType) -> String {
@@ -348,10 +366,7 @@ impl HtmlParser {
     fn make_relative_path(&self, local_path: &str) -> String {
         // Convert absolute path to relative path from the HTML file location
         if let Some(relative) = local_path.strip_prefix(&self.output_dir) {
-            relative
-                .strip_prefix('/')
-                .unwrap_or(relative)
-                .to_string()
+            relative.strip_prefix('/').unwrap_or(relative).to_string()
         } else {
             local_path.to_string()
         }
@@ -366,7 +381,7 @@ mod tests {
     fn test_url_resolution() {
         let base_url = Url::parse("https://example.com/page/").unwrap();
         let parser = HtmlParser::new(base_url, "./output".to_string());
-        
+
         let relative_url = "image.jpg";
         let resolved = parser.resolve_url(relative_url).unwrap();
         assert_eq!(resolved.as_str(), "https://example.com/page/image.jpg");
@@ -435,14 +450,10 @@ mod tests {
         let base_url = Url::parse("https://example.com/").unwrap();
         let parser = HtmlParser::new(base_url, "./output".to_string());
         let (_, resources) = parser.parse_html(html).unwrap();
-        assert!(
-            resources
-                .iter()
-                .any(|r| r.url.path().ends_with("imported.css"))
-        );
-        assert!(
-            resources.iter().any(|r| r.url.path().ends_with("bg.png"))
-        );
+        assert!(resources
+            .iter()
+            .any(|r| r.url.path().ends_with("imported.css")));
+        assert!(resources.iter().any(|r| r.url.path().ends_with("bg.png")));
     }
 
     #[test]
@@ -463,4 +474,4 @@ mod tests {
         let relative = parser.make_relative_path("/output/static/css/app.css");
         assert_eq!(relative, "static/css/app.css");
     }
-} 
+}

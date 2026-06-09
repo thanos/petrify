@@ -4,6 +4,6 @@
 //! local paths, and downloads referenced assets (HTML, CSS, JS, images, etc.).
 
 pub mod config;
-pub mod html_parser;
 pub mod engine;
+pub mod html_parser;
 pub mod types;

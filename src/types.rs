@@ -45,7 +45,9 @@ impl From<&str> for ResourceType {
             mime if mime.starts_with("image/") => ResourceType::Image,
             mime if mime.starts_with("video/") => ResourceType::Video,
             "application/pdf" => ResourceType::PDF,
-            mime if mime.starts_with("font/") || mime == "application/font-woff" => ResourceType::Font,
+            mime if mime.starts_with("font/") || mime == "application/font-woff" => {
+                ResourceType::Font
+            }
             _ => ResourceType::Other,
         }
     }
@@ -145,7 +147,11 @@ impl WorkQueue {
         // Resources can be added multiple times (they might be referenced from different pages)
         // Only check if we already have this exact resource to avoid duplicates
         let normalized = self.normalize_url(&url);
-        if !self.resources.iter().any(|r| self.normalize_url(r) == normalized) {
+        if !self
+            .resources
+            .iter()
+            .any(|r| self.normalize_url(r) == normalized)
+        {
             self.resources.push(url);
         }
     }
@@ -198,10 +204,7 @@ mod tests {
 
     #[test]
     fn resource_type_from_mime() {
-        assert!(matches!(
-            ResourceType::from("text/css"),
-            ResourceType::CSS
-        ));
+        assert!(matches!(ResourceType::from("text/css"), ResourceType::CSS));
         assert!(matches!(
             ResourceType::from("image/png"),
             ResourceType::Image
@@ -221,14 +224,8 @@ mod tests {
         queue.add_resource(Url::parse("https://example.com/b.js").unwrap());
         assert!(!queue.is_empty());
 
-        assert_eq!(
-            queue.get_next_page().unwrap().path(),
-            "/a"
-        );
-        assert_eq!(
-            queue.get_next_resource().unwrap().path(),
-            "/b.js"
-        );
+        assert_eq!(queue.get_next_page().unwrap().path(), "/a");
+        assert_eq!(queue.get_next_resource().unwrap().path(), "/b.js");
         assert!(queue.is_empty());
     }
-} 
+}

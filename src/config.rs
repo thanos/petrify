@@ -82,4 +82,4 @@ mod tests {
         assert_eq!(Config::default().output, Config::new().output);
         assert_eq!(Config::default().timeout, Config::new().timeout);
     }
-} 
+}

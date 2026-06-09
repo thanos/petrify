@@ -20,14 +20,16 @@ fn extracts_css_js_and_images_from_fixture() {
     assert!(
         resources
             .iter()
-            .any(|r| r.resource_type == ResourceType::JavaScript && r.url.path().ends_with("script.js")),
+            .any(|r| r.resource_type == ResourceType::JavaScript
+                && r.url.path().ends_with("script.js")),
         "expected javascript resource"
     );
     assert!(
         resources
             .iter()
             .filter(|r| r.resource_type == ResourceType::Image)
-            .count() >= 2,
+            .count()
+            >= 2,
         "expected at least two image resources"
     );
 }
@@ -46,14 +48,13 @@ fn rewrites_urls_to_local_paths() {
 
 #[test]
 fn discovers_extensionless_html_links() {
-    let html = r#"<html><body><a href="/about">About</a><a href="/contact">Contact</a></body></html>"#;
+    let html =
+        r#"<html><body><a href="/about">About</a><a href="/contact">Contact</a></body></html>"#;
     let base_url = Url::parse("https://example.com/").unwrap();
     let parser = HtmlParser::new(base_url, "./output".to_string());
 
     let (_, resources) = parser.parse_html(html).unwrap();
-    assert!(
-        resources
-            .iter()
-            .any(|r| r.resource_type == ResourceType::HTML && r.url.path() == "/about")
-    );
+    assert!(resources
+        .iter()
+        .any(|r| r.resource_type == ResourceType::HTML && r.url.path() == "/about"));
 }

@@ -26,7 +26,7 @@ impl Petrifier {
         Self::create_output_directories(&config.output)?;
 
         let multi_progress = MultiProgress::new();
-        
+
         Ok(Self {
             config,
             work_queue: Arc::new(Mutex::new(WorkQueue::new())),
@@ -38,46 +38,46 @@ impl Petrifier {
 
     pub async fn run(&mut self) -> Result<()> {
         info!("Starting petrify process");
-        
+
         // Parse the initial URL
         let base_url = Url::parse(&self.config.url)?;
-        
+
         // Add the initial page to the work queue
         {
             let mut queue = self.work_queue.lock().unwrap();
             queue.add_page(base_url.clone());
         }
-        
+
         // Scan the site to discover all pages first
         self.scan_site(&base_url).await?;
-        
+
         // Show initial report
         self.show_initial_report().await?;
-        
+
         // Process pages with concurrent workers
         self.process_pages_concurrently().await?;
-        
+
         // Download all resources
         self.download_all_resources().await?;
-        
+
         // Show final report
         self.show_final_report().await?;
-        
+
         Ok(())
     }
 
     async fn scan_site(&self, base_url: &Url) -> Result<()> {
         info!("Scanning site to discover all pages...");
-        
+
         let mut visited = HashMap::new();
         let mut to_visit = vec![base_url.clone()];
         let mut discovered_pages = 0;
         let mut discovered_resources = 0;
-        
+
         // Create progress bar for scanning
         let scan_progress = self.multi_progress.add(ProgressBar::new_spinner());
         scan_progress.set_message("🔍 Scanning site for pages and resources...");
-        
+
         while let Some(url) = to_visit.pop() {
             let normalized = self.normalize_url(&url);
             if visited.contains_key(&normalized) {
@@ -87,7 +87,11 @@ impl Petrifier {
             visited.insert(normalized.clone(), true);
             discovered_pages += 1;
 
-            scan_progress.set_message(format!("🔍 Scanning page {}: {}", discovered_pages, url.path()));
+            scan_progress.set_message(format!(
+                "🔍 Scanning page {}: {}",
+                discovered_pages,
+                url.path()
+            ));
 
             if self.config.is_page_limit_reached(discovered_pages) {
                 scan_progress.set_message(format!(
@@ -135,67 +139,81 @@ impl Petrifier {
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to download page during scan {}: {}", url.as_str(), e);
+                    warn!(
+                        "Failed to download page during scan {}: {}",
+                        url.as_str(),
+                        e
+                    );
                 }
             }
         }
-        
+
         scan_progress.finish_with_message(format!(
             "✅ Site scanning completed! Found {} pages to crawl and {} resources to download",
-            discovered_pages,
-            discovered_resources
+            discovered_pages, discovered_resources
         ));
-        
-        info!("Site scanning completed - {} pages to crawl, {} resources to download", discovered_pages, discovered_resources);
+
+        info!(
+            "Site scanning completed - {} pages to crawl, {} resources to download",
+            discovered_pages, discovered_resources
+        );
         Ok(())
     }
 
     async fn process_pages_concurrently(&self) -> Result<()> {
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent));
         let mut handles = Vec::new();
-        
+
         // Get all pages to process
         let mut pages = {
             let queue = self.work_queue.lock().unwrap();
             queue.pages.clone()
         };
-        
+
         // Apply page limit if set
         if self.config.should_limit_pages() {
             pages.truncate(self.config.max_pages);
-            info!("Page limit applied: processing only {} pages out of {} discovered", pages.len(), self.config.max_pages);
+            info!(
+                "Page limit applied: processing only {} pages out of {} discovered",
+                pages.len(),
+                self.config.max_pages
+            );
         }
-        
+
         // Update stats
         {
             let mut stats = self.stats.lock().unwrap();
             stats.total_pages = pages.len();
         }
-        
-        info!("Processing {} pages with {} concurrent workers", pages.len(), self.config.max_concurrent);
-        
+
+        info!(
+            "Processing {} pages with {} concurrent workers",
+            pages.len(),
+            self.config.max_concurrent
+        );
+
         for page_url in pages {
             let permit = semaphore.clone().acquire_owned().await?;
             let work_queue = Arc::clone(&self.work_queue);
             let stats = Arc::clone(&self.stats);
             let config = self.config.clone();
             let output_dir = self.config.output.clone();
-            
+
             let handle = tokio::spawn(async move {
                 let _permit = permit;
                 Self::process_single_page(page_url, work_queue, stats, config, output_dir).await
             });
-            
+
             handles.push(handle);
         }
-        
+
         // Wait for all pages to be processed
         for handle in handles {
             if let Err(e) = handle.await? {
                 error!("Page processing failed: {}", e);
             }
         }
-        
+
         Ok(())
     }
 
@@ -208,17 +226,17 @@ impl Petrifier {
     ) -> Result<()> {
         // Download the page
         let html_content = Self::download_page_static(&page_url, &config).await?;
-        
+
         // Parse HTML and extract resources
         let html_content_str = String::from_utf8(html_content)?;
         let parser = HtmlParser::new(page_url.clone(), output_dir.clone());
         let (modified_html, resources) = parser.parse_html(&html_content_str)?;
-        
+
         // Save the modified HTML
         let page_path = Self::generate_page_path(&page_url, &output_dir)?;
         Self::ensure_directory_exists(&page_path)?;
         fs::write(&page_path, modified_html)?;
-        
+
         // Add resources to the work queue
         {
             let mut queue = work_queue.lock().unwrap();
@@ -226,54 +244,61 @@ impl Petrifier {
                 queue.add_resource(resource.url);
             }
         }
-        
+
         // Update stats
         {
             let mut stats = stats.lock().unwrap();
             stats.processed_pages += 1;
         }
-        
+
         info!("Processed page: {}", page_url);
         Ok(())
     }
 
     async fn download_all_resources(&self) -> Result<()> {
         info!("Downloading all resources...");
-        
+
         let resources = {
             let queue = self.work_queue.lock().unwrap();
             queue.resources.clone()
         };
-        
+
         // Update stats
         {
             let mut stats = self.stats.lock().unwrap();
             stats.total_resources = resources.len();
         }
-        
+
         // Group resources by type
         let mut resources_by_type: HashMap<ResourceType, Vec<Url>> = HashMap::new();
         for url in resources {
             let resource_type = Self::determine_resource_type(&url);
-            resources_by_type.entry(resource_type).or_default().push(url);
+            resources_by_type
+                .entry(resource_type)
+                .or_default()
+                .push(url);
         }
-        
+
         // Download resources by type with progress bars
         for (resource_type, urls) in resources_by_type {
             if !self.config.should_download_type(&resource_type) {
                 continue;
             }
-            
+
             self.download_resources_by_type(resource_type, urls).await?;
         }
-        
+
         Ok(())
     }
 
-    async fn download_resources_by_type(&self, resource_type: ResourceType, urls: Vec<Url>) -> Result<()> {
+    async fn download_resources_by_type(
+        &self,
+        resource_type: ResourceType,
+        urls: Vec<Url>,
+    ) -> Result<()> {
         let type_name = format!("{:?}", resource_type);
         info!("Downloading {} {} resources", urls.len(), type_name);
-        
+
         let progress_bar = self.multi_progress.add(ProgressBar::new(urls.len() as u64));
         progress_bar.set_style(
             ProgressStyle::default_bar()
@@ -281,10 +306,10 @@ impl Petrifier {
                 .unwrap()
                 .progress_chars("#>-"),
         );
-        
+
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent));
         let mut handles = Vec::new();
-        
+
         for url in &urls {
             let permit = semaphore.clone().acquire_owned().await?;
             let url_clone = url.clone();
@@ -294,7 +319,7 @@ impl Petrifier {
             let progress_bar = progress_bar.clone();
             let downloaded_resources = Arc::clone(&self.downloaded_resources);
             let stats = Arc::clone(&self.stats);
-            
+
             let handle = tokio::spawn(async move {
                 let _permit = permit;
                 Self::download_single_resource(
@@ -305,20 +330,25 @@ impl Petrifier {
                     progress_bar,
                     downloaded_resources,
                     stats,
-                ).await
+                )
+                .await
             });
-            
+
             handles.push(handle);
         }
-        
+
         // Wait for all resources to be downloaded
         for handle in handles {
             if let Err(e) = handle.await? {
                 error!("Resource download failed: {}", e);
             }
         }
-        
-        progress_bar.finish_with_message(format!("{} {} resources downloaded", urls.len(), type_name));
+
+        progress_bar.finish_with_message(format!(
+            "{} {} resources downloaded",
+            urls.len(),
+            type_name
+        ));
         Ok(())
     }
 
@@ -332,7 +362,7 @@ impl Petrifier {
         stats: Arc<Mutex<DownloadStats>>,
     ) -> Result<()> {
         let normalized_url = Self::normalize_url_static(&url);
-        
+
         // Check if already downloaded
         {
             let downloaded = downloaded_resources.lock().unwrap();
@@ -341,13 +371,13 @@ impl Petrifier {
                 return Ok(());
             }
         }
-        
+
         let content = Self::download_page_static(&url, &config).await?;
-        
+
         // Generate local path
         let local_path = Self::generate_resource_path(&url, &resource_type, &output_dir)?;
         Self::ensure_directory_exists(&local_path)?;
-        
+
         // Process based on resource type
         let (final_content, final_local_path) = match resource_type {
             ResourceType::Image if config.convert_to_webp => {
@@ -358,10 +388,10 @@ impl Petrifier {
             }
             _ => (content.clone(), local_path.clone()),
         };
-        
+
         // Save the resource
         fs::write(&final_local_path, &final_content)?;
-        
+
         // Create resource record
         let resource = Resource {
             url: url.clone(),
@@ -371,26 +401,26 @@ impl Petrifier {
             size: Some(final_content.len() as u64),
             downloaded: true,
         };
-        
+
         // Store in downloaded resources
         {
             let mut downloaded = downloaded_resources.lock().unwrap();
             downloaded.insert(normalized_url, resource);
         }
-        
+
         // Update stats
         {
             let mut stats = stats.lock().unwrap();
             stats.downloaded_resources += 1;
             stats.total_size += final_content.len() as u64;
         }
-        
+
         progress_bar.inc(1);
         progress_bar.set_message(format!(
             "Downloaded: {}",
             url.path().split('/').next_back().unwrap_or("unknown")
         ));
-        
+
         Ok(())
     }
 
@@ -398,7 +428,7 @@ impl Petrifier {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(self.config.timeout))
             .build()?;
-        
+
         let response = client.get(url.as_str()).send().await?;
         let status = response.status();
         if !status.is_success() {
@@ -429,21 +459,22 @@ impl Petrifier {
             }
             return Err(anyhow!("HTTP error {} for {}", status, url.as_str()));
         }
-        
+
         let content = response.bytes().await?;
         Ok(content.to_vec())
     }
 
     fn convert_image_to_webp(image_data: &[u8], config: &Config) -> Result<Vec<u8>> {
         let img = image::load_from_memory(image_data)?;
-        
-        let encoder = webp::Encoder::from_image(&img).map_err(|e| anyhow!("WebP encoder error: {}", e))?;
+
+        let encoder =
+            webp::Encoder::from_image(&img).map_err(|e| anyhow!("WebP encoder error: {}", e))?;
         let webp_data = if config.webp_lossless {
             encoder.encode_lossless()
         } else {
             encoder.encode(config.webp_quality as f32)
         };
-        
+
         Ok(webp_data.to_vec())
     }
 
@@ -463,18 +494,18 @@ impl Petrifier {
 
     fn generate_page_path(url: &Url, output_dir: &str) -> Result<String> {
         let path = url.path();
-        
+
         if path.is_empty() || path == "/" {
             // Root page
             return Ok(format!("{}/index.html", output_dir));
         }
-        
+
         let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        
+
         if segments.is_empty() {
             return Ok(format!("{}/index.html", output_dir));
         }
-        
+
         // Create directory structure matching the original URL
         if segments.len() == 1 {
             let filename = segments[0];
@@ -490,7 +521,10 @@ impl Petrifier {
             let filename = segments.last().unwrap();
 
             if path.ends_with('/') {
-                Ok(format!("{}/{}/{}/index.html", output_dir, dir_path, filename))
+                Ok(format!(
+                    "{}/{}/{}/index.html",
+                    output_dir, dir_path, filename
+                ))
             } else if filename.ends_with(".html") || filename.ends_with(".htm") {
                 Ok(format!("{}/{}/{}", output_dir, dir_path, filename))
             } else {
@@ -499,10 +533,14 @@ impl Petrifier {
         }
     }
 
-    fn generate_resource_path(url: &Url, resource_type: &ResourceType, output_dir: &str) -> Result<String> {
+    fn generate_resource_path(
+        url: &Url,
+        resource_type: &ResourceType,
+        output_dir: &str,
+    ) -> Result<String> {
         let path = url.path();
         let filename = path.split('/').next_back().unwrap_or("unknown");
-        
+
         let subdirectory = match resource_type {
             ResourceType::CSS => "static/css",
             ResourceType::JavaScript => "static/js",
@@ -512,7 +550,7 @@ impl Petrifier {
             ResourceType::Font => "static/fonts",
             _ => "static/other",
         };
-        
+
         Ok(format!("{}/{}/{}", output_dir, subdirectory, filename))
     }
 
@@ -533,11 +571,11 @@ impl Petrifier {
             "static/fonts",
             "static/other",
         ];
-        
+
         for dir in &directories {
             fs::create_dir_all(format!("{}/{}", output_dir, dir))?;
         }
-        
+
         Ok(())
     }
 
@@ -578,7 +616,7 @@ impl Petrifier {
     fn guess_mime_type(url: &Url, resource_type: &ResourceType) -> String {
         let path = url.path();
         let extension = path.split('.').next_back().unwrap_or("").to_lowercase();
-        
+
         match extension.as_str() {
             "html" | "htm" => "text/html".to_string(),
             "css" => "text/css".to_string(),
@@ -612,42 +650,70 @@ impl Petrifier {
     async fn show_initial_report(&self) -> Result<()> {
         let queue = self.work_queue.lock().unwrap();
         let _stats = self.stats.lock().unwrap();
-        
+
         println!("\n{}", "=".repeat(60).blue());
         println!("{}", "PETRIFY INITIAL REPORT".bold().blue());
         println!("{}", "=".repeat(60).blue());
         println!("Target URL: {}", self.config.url.green());
         println!("Output Directory: {}", self.config.output.green());
-        println!("Discovered Pages: {}", queue.pages.len().to_string().yellow());
-        println!("Discovered Resources: {}", queue.resources.len().to_string().yellow());
-        println!("Max Concurrent Workers: {}", self.config.max_concurrent.to_string().cyan());
+        println!(
+            "Discovered Pages: {}",
+            queue.pages.len().to_string().yellow()
+        );
+        println!(
+            "Discovered Resources: {}",
+            queue.resources.len().to_string().yellow()
+        );
+        println!(
+            "Max Concurrent Workers: {}",
+            self.config.max_concurrent.to_string().cyan()
+        );
         if self.config.should_limit_pages() {
             println!("Page Limit: {} pages (for testing)", self.config.max_pages);
         }
-        println!("Download Types: {}", self.config.download_only.join(", ").cyan());
-        println!("WebP Conversion: {}", if self.config.convert_to_webp { "Enabled".green() } else { "Disabled".red() });
+        println!(
+            "Download Types: {}",
+            self.config.download_only.join(", ").cyan()
+        );
+        println!(
+            "WebP Conversion: {}",
+            if self.config.convert_to_webp {
+                "Enabled".green()
+            } else {
+                "Disabled".red()
+            }
+        );
         println!("Output Structure: HTML files in root, resources in static/ subdirectories");
         println!("{}", "=".repeat(60).blue());
         println!();
-        
+
         Ok(())
     }
 
     async fn show_final_report(&self) -> Result<()> {
         let stats = self.stats.lock().unwrap();
         let _downloaded = self.downloaded_resources.lock().unwrap();
-        
+
         println!("\n{}", "=".repeat(60).green());
         println!("{}", "PETRIFY COMPLETED".bold().green());
         println!("{}", "=".repeat(60).green());
-        println!("Total Pages Processed: {}", stats.processed_pages.to_string().green());
-        println!("Total Resources Downloaded: {}", stats.downloaded_resources.to_string().green());
-        println!("Total Size Downloaded: {} bytes", stats.total_size.to_string().green());
+        println!(
+            "Total Pages Processed: {}",
+            stats.processed_pages.to_string().green()
+        );
+        println!(
+            "Total Resources Downloaded: {}",
+            stats.downloaded_resources.to_string().green()
+        );
+        println!(
+            "Total Size Downloaded: {} bytes",
+            stats.total_size.to_string().green()
+        );
         println!("Elapsed Time: {:?}", stats.elapsed_time());
         println!("Output Directory: {}", self.config.output.green());
         println!("{}", "=".repeat(60).green());
         println!();
-        
+
         Ok(())
     }
 }
@@ -804,7 +870,9 @@ mod tests {
 
         let config = test_config();
         let url = Url::parse(&format!("{}/hello", server.uri())).unwrap();
-        let body = Petrifier::download_page_static(&url, &config).await.unwrap();
+        let body = Petrifier::download_page_static(&url, &config)
+            .await
+            .unwrap();
         assert_eq!(body, b"petrified");
     }
 
