@@ -1,44 +1,52 @@
 [package]
-name = "website-mirror"
-version = "0.1.2"
+name = "petrify"
+version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
-description = "A CLI utility to mirror websites by downloading static copies of HTML, CSS, images, and JavaScript files"
-
-[lib]
-name = "website_mirror"
-path = "src/lib.rs"
-
-[[bin]]
-name = "website-mirror"
-path = "src/main.rs"
+rust-version = "1.74"
+authors = ["Thanos Vassilakis <thanosv@gmail.com>"]
+description = "Petrify live websites into static offline copies"
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/thanos/petrify"
+homepage = "https://github.com/thanos/petrify"
+documentation = "https://docs.rs/petrify"
+keywords = ["static", "website", "offline", "wget", "archive", "petrify"]
+categories = ["command-line-utilities", "web-programming"]
+exclude = [
+    "test_output/**",
+    "example_output/**",
+    "test_site/**",
+    "simple_test.html",
+    "test_petrify.sh",
+    ".github/**",
+    "scripts/**",
+    "GITHUB_ACTIONS.md",
+]
 
 [dependencies]
 tokio = { version = "1.0", features = ["full"] }
-reqwest = { version = "0.11", features = ["stream", "json", "rustls-tls", "cookies"] }
+reqwest = { version = "0.11", features = ["stream", "rustls-tls"] }
 url = "2.4"
 clap = { version = "4.4", features = ["derive"] }
-futures = "0.3"
-anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-regex = "1.0"
 html5ever = "0.26"
 markup5ever_rcdom = "0.2"
-select = "0.6"
-mime = "0.3"
-mime_guess = "2.0"
-pathdiff = "0.2"
+anyhow = "1.0"
 indicatif = "0.17"
-console = "0.15"
+image = "0.24"
+webp = "0.2"
+regex = "1.0"
+log = "0.4"
+env_logger = "0.10"
 colored = "2.0"
-        rustls = "0.21"
-        rustls-pemfile = "1.0"
-        webpki-roots = "0.25"
-        image = "0.24"
-        webp = "0.2" 
+num_cpus = "1.17.0"
 
 [dev-dependencies]
-criterion = "0.7.0"
-mockall = "0.13.1"
-tempfile = "3.21.0"
+image = "0.24"
+tempfile = "3.10"
+wiremock = "0.6"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

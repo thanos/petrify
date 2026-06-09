@@ -1,10 +1,9 @@
-pub mod cli;
-pub mod downloader;
-pub mod file_manager;
-pub mod html_parser;
+//! Petrify — turn live websites into static offline copies.
+//!
+//! The library powers the `petrify` CLI. It discovers pages, rewrites links to
+//! local paths, and downloads referenced assets (HTML, CSS, JS, images, etc.).
 
-// Re-export main types for convenience
-pub use cli::MirrorCommand;
-pub use downloader::{WebsiteMirror, DownloadTask, DownloadPriority};
-pub use file_manager::FileManager;
-pub use html_parser::{HtmlParser, ResourceType, ResourceLink}; 
+pub mod config;
+pub mod html_parser;
+pub mod engine;
+pub mod types;

@@ -1,658 +1,466 @@
-use anyhow::{Result, Context};
-use select::document::Document;
-use select::predicate::{Name, Attr};
+use crate::types::{Resource, ResourceType};
+use anyhow::{anyhow, Result};
+use html5ever::parse_document;
+use html5ever::tendril::TendrilSink;
+use markup5ever_rcdom::{Handle, NodeData, RcDom};
+use regex::Regex;
+use std::collections::{HashMap, HashSet};
 use url::Url;
 
-#[derive(Debug, Clone)]
-pub struct ResourceLink {
-    pub original_url: String,
-    pub local_path: String,
-    pub resource_type: ResourceType,
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct UrlReference {
+    original: String,
+    resolved: Url,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResourceType {
-    CSS,
-    JavaScript,
-    Image,
-    Link,
-    PDF,
-    Video,
-    Other,
-}
-
-#[derive(Clone)]
-#[derive(Debug)]
 pub struct HtmlParser {
     base_url: Url,
+    output_dir: String,
 }
 
 impl HtmlParser {
-    pub fn new(base_url: &str) -> Result<Self> {
-        let base_url = Url::parse(base_url)
-            .with_context(|| format!("Failed to parse base URL: {}", base_url))?;
-        
-        Ok(Self { base_url })
+    pub fn new(base_url: Url, output_dir: String) -> Self {
+        Self {
+            base_url,
+            output_dir,
+        }
     }
-    
-    pub fn extract_resources(&self, html_content: &str) -> Result<Vec<ResourceLink>> {
-        let document = Document::from(html_content);
+
+    pub fn parse_html(&self, html_content: &str) -> Result<(String, Vec<Resource>)> {
+        let dom = parse_document(RcDom::default(), Default::default())
+            .from_utf8()
+            .one(html_content.as_bytes());
+
         let mut resources = Vec::new();
-        
-        // Extract CSS files
-        for link in document.find(Name("link")) {
-            if let Some(href) = link.attr("href") {
-                if let Some(rel) = link.attr("rel") {
-                    if rel.contains("stylesheet") {
-                        if let Ok(resource) = self.create_resource_link(href, ResourceType::CSS) {
-                            resources.push(resource);
+        let mut modified_html = html_content.to_string();
+
+        let references = self.extract_url_references(&dom.document)?;
+        let mut local_paths = HashMap::new();
+
+        for reference in &references {
+            if local_paths.contains_key(reference.resolved.as_str()) {
+                continue;
+            }
+            match self.create_resource(&reference.resolved) {
+                Ok(resource) => {
+                    local_paths.insert(reference.resolved.to_string(), resource.local_path.clone());
+                    resources.push(resource);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to create resource for {}: {}",
+                        reference.resolved.as_str(),
+                        e
+                    );
+                }
+            }
+        }
+
+        for reference in &references {
+            if let Some(local_path) = local_paths.get(reference.resolved.as_str()) {
+                modified_html =
+                    self.replace_url_in_html(&modified_html, &reference.original, local_path);
+            }
+        }
+
+        Ok((modified_html, resources))
+    }
+
+    fn extract_url_references(&self, handle: &Handle) -> Result<Vec<UrlReference>> {
+        let mut references = Vec::new();
+        let mut seen = HashSet::new();
+        self.walk_dom(handle, &mut references, &mut seen)?;
+        Ok(references)
+    }
+
+    fn walk_dom(
+        &self,
+        handle: &Handle,
+        references: &mut Vec<UrlReference>,
+        seen: &mut HashSet<(String, String)>,
+    ) -> Result<()> {
+        let node = handle;
+
+        match &node.data {
+            NodeData::Element { ref attrs, .. } => {
+                for attr in attrs.borrow().iter() {
+                    if self.is_url_attribute(&attr.name.local) {
+                        let url_str = attr.value.to_string();
+                        if let Ok(url) = self.resolve_url(&url_str) {
+                            let key = (url_str.clone(), url.to_string());
+                            if seen.insert(key) {
+                                references.push(UrlReference {
+                                    original: url_str,
+                                    resolved: url,
+                                });
+                            }
                         }
                     }
                 }
             }
-        }
-        
-        // Extract JavaScript files
-        for script in document.find(Name("script")) {
-            if let Some(src) = script.attr("src") {
-                if let Ok(resource) = self.create_resource_link(src, ResourceType::JavaScript) {
-                    resources.push(resource);
-                }
-            }
-        }
-        
-        // Extract images
-        for img in document.find(Name("img")) {
-            if let Some(src) = img.attr("src") {
-                // Skip data URLs
-                if !src.starts_with("data:") {
-                    if let Ok(resource) = self.create_resource_link(src, ResourceType::Image) {
-                        resources.push(resource);
+            NodeData::Text { ref contents } => {
+                if let Some(urls_in_text) = self.extract_urls_from_text(&contents.borrow()) {
+                    for url_str in urls_in_text {
+                        if let Ok(url) = self.resolve_url(&url_str) {
+                            let key = (url_str.clone(), url.to_string());
+                            if seen.insert(key) {
+                                references.push(UrlReference {
+                                    original: url_str,
+                                    resolved: url,
+                                });
+                            }
+                        }
                     }
                 }
             }
+            _ => {}
         }
-        
-        // Extract background images from inline styles
-        for element in document.find(Attr("style", ())) {
-            if let Some(style) = element.attr("style") {
-                self.extract_background_images_from_css(style, &mut resources);
-            }
+
+        for child in node.children.borrow().iter() {
+            self.walk_dom(child, references, seen)?;
         }
-        
-        // Note: CSS files are already extracted above, no need to extract them again here
-        
-        // Extract links, PDFs, and videos from <a> tags (process each tag only once)
-        for link in document.find(Name("a")) {
-            if let Some(href) = link.attr("href") {
-                // Determine resource type based on file extension
-                let resource_type = if href.ends_with(".pdf") || href.ends_with(".PDF") {
-                    ResourceType::PDF
-                } else if href.to_lowercase().ends_with(".mp4") || href.to_lowercase().ends_with(".avi") || 
-                          href.to_lowercase().ends_with(".mov") || href.to_lowercase().ends_with(".wmv") ||
-                          href.to_lowercase().ends_with(".flv") || href.to_lowercase().ends_with(".webm") ||
-                          href.to_lowercase().ends_with(".mkv") || href.to_lowercase().ends_with(".m4v") {
-                    ResourceType::Video
-                } else {
-                    ResourceType::Link
-                };
-                
-                if let Ok(resource) = self.create_resource_link(href, resource_type) {
-                    resources.push(resource);
-                }
-            }
-        }
-        
-        // Extract video files from video elements
-        for video in document.find(Name("video")) {
-            if let Some(src) = video.attr("src") {
-                if let Ok(resource) = self.create_resource_link(src, ResourceType::Video) {
-                    resources.push(resource);
-                }
-            }
-        }
-        
-        // Extract video sources from source elements
-        for source in document.find(Name("source")) {
-            if let Some(src) = source.attr("src") {
-                if let Ok(resource) = self.create_resource_link(src, ResourceType::Video) {
-                    resources.push(resource);
-                }
-            }
-        }
-        
-        Ok(resources)
+
+        Ok(())
     }
-    
-    pub fn create_resource_link(&self, url: &str, resource_type: ResourceType) -> Result<ResourceLink> {
-        let absolute_url = self.resolve_url(url)?;
-        let local_path = self.url_to_local_path(&absolute_url)?;
-        
-        Ok(ResourceLink {
-            original_url: url.to_string(), // Store the original URL as provided
-            local_path,
-            resource_type,
-        })
+
+    fn is_url_attribute(&self, attr_name: &str) -> bool {
+        matches!(
+            attr_name,
+            "src" | "href" | "data-src" | "data-original" | "poster" | "background" | "data-srcset" | "data-lazy-src"
+        )
     }
-    
-    pub fn resolve_url(&self, url: &str) -> Result<Url> {
-        // Reject data URLs, fragments, and other invalid schemes
-        if url.starts_with("data:") || url.starts_with("#") || 
-           url.starts_with("mailto:") || url.starts_with("tel:") || 
-           url.starts_with("javascript:") {
-            return Err(anyhow::anyhow!("Invalid URL scheme: {}", url));
-        }
+
+    fn extract_urls_from_text(&self, text: &str) -> Option<Vec<String>> {
+        let mut urls = Vec::new();
         
-        if url.starts_with("http://") || url.starts_with("https://") {
-            Ok(Url::parse(url)?)
-        } else if url.starts_with("//") {
-            // Protocol-relative URL
+        // Extract URLs from CSS @import statements
+        let import_regex = Regex::new(r#"@import\s+["']([^"']+)["']"#).ok()?;
+        for cap in import_regex.captures_iter(text) {
+            if let Some(url) = cap.get(1) {
+                urls.push(url.as_str().to_string());
+            }
+        }
+
+        // Extract URLs from CSS url() functions
+        let url_regex = Regex::new(r#"url\(["']?([^"')]+)["']?\)"#).ok()?;
+        for cap in url_regex.captures_iter(text) {
+            if let Some(url) = cap.get(1) {
+                urls.push(url.as_str().to_string());
+            }
+        }
+
+        if urls.is_empty() {
+            None
+        } else {
+            Some(urls)
+        }
+    }
+
+    fn resolve_url(&self, url_str: &str) -> Result<Url> {
+        if url_str.starts_with("data:") || url_str.starts_with("#") {
+            return Err(anyhow!("Skipping data URL or fragment"));
+        }
+
+        if url_str.starts_with("//") {
             let scheme = self.base_url.scheme();
-            let url_with_scheme = format!("{}:{}", scheme, url);
-            Ok(Url::parse(&url_with_scheme)?)
+            Ok(Url::parse(&format!("{scheme}:{url_str}"))?)
+        } else if url_str.starts_with('/') {
+            // Absolute path
+            let mut url = self.base_url.clone();
+            url.set_path(url_str);
+            Ok(url)
+        } else if url_str.starts_with("http://") || url_str.starts_with("https://") {
+            // Absolute URL
+            Ok(Url::parse(url_str)?)
         } else {
             // Relative URL
-            Ok(self.base_url.join(url)?)
+            Ok(self.base_url.join(url_str)?)
         }
     }
-    
-    fn url_to_local_path(&self, url: &Url) -> Result<String> {
-        let mut path = url.path().to_string();
+
+    fn create_resource(&self, url: &Url) -> Result<Resource> {
+        let resource_type = self.determine_resource_type(url);
+        let local_path = self.generate_local_path(url, &resource_type)?;
         
-        // Remove leading slash
-        if path.starts_with('/') {
-            path = path[1..].to_string();
+        Ok(Resource {
+            url: url.clone(),
+            local_path,
+            resource_type: resource_type.clone(),
+            mime_type: self.guess_mime_type(url, &resource_type),
+            size: None,
+            downloaded: false,
+        })
+    }
+
+    fn determine_resource_type(&self, url: &Url) -> ResourceType {
+        let path = url.path();
+        let extension = path.split('.').next_back().unwrap_or("").to_lowercase();
+
+        // Check for explicit file extensions first
+        match extension.as_str() {
+            "html" | "htm" => ResourceType::HTML,
+            "css" => ResourceType::CSS,
+            "js" | "javascript" => ResourceType::JavaScript,
+            "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "ico" | "bmp" | "tiff" | "tif" => ResourceType::Image,
+            "mp4" | "webm" | "ogg" | "avi" | "mov" | "m4v" => ResourceType::Video,
+            "pdf" => ResourceType::PDF,
+            "woff" | "woff2" | "ttf" | "otf" | "eot" => ResourceType::Font,
+            _ => {
+                // For URLs without extensions, check if they look like HTML pages
+                if self.looks_like_html_page(path) {
+                    ResourceType::HTML
+                } else {
+                    ResourceType::Other
+                }
+            }
+        }
+    }
+
+    fn looks_like_html_page(&self, path: &str) -> bool {
+        // Skip empty paths and root
+        if path.is_empty() || path == "/" {
+            return false;
         }
         
-        // Handle root path
-        if path.is_empty() {
-            path = "index.html".to_string();
-        } else if path.ends_with('/') {
-            path.push_str("index.html");
-        } else if !path.contains('.') {
-            // No file extension, assume it's a directory
-            path.push_str("/index.html");
+        // Check if the path ends with a slash (directory-like)
+        if path.ends_with('/') {
+            return true;
         }
         
-        // Add query parameters if they exist
-        if let Some(query) = url.query() {
-            if !query.is_empty() {
-                path = format!("{}?{}", path, query);
+        // Check if the path looks like a content page (not a file)
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        
+        // If it's a single segment without extension, likely a page
+        if segments.len() == 1 && !segments[0].contains('.') {
+            return true;
+        }
+        
+        // If it's multiple segments and the last one doesn't have an extension, likely a page
+        if segments.len() > 1 {
+            let last_segment = segments.last().unwrap_or(&"");
+            if !last_segment.contains('.') && !last_segment.is_empty() {
+                return true;
             }
         }
         
-        // Sanitize the path for filesystem
-        path = self.sanitize_path(&path);
-        
-        Ok(path)
+        false
     }
-    
-    pub fn sanitize_path(&self, path: &str) -> String {
-        path.chars()
-            .map(|c| match c {
-                '&' | '#' => '_',
-                ' ' => '_',
-                c if c.is_ascii_alphanumeric() || c == '/' || c == '.' || c == '-' || c == '?' || c == '=' => c,
-                _ => '_',
-            })
-            .collect()
-    }
-    
-    pub fn convert_html_links(&self, html_content: &str) -> Result<String> {
-        let document = Document::from(html_content);
-        let mut modified_html = html_content.to_string();
+
+    fn generate_local_path(&self, url: &Url, resource_type: &ResourceType) -> Result<String> {
+        let path = url.path();
         
-        // Convert CSS links
-        for link in document.find(Name("link")) {
-            if let Some(href) = link.attr("href") {
-                if let Some(rel) = link.attr("rel") {
-                    if rel.contains("stylesheet") {
-                        if let Ok(local_path) = self.convert_url_to_local(href) {
-                            modified_html = modified_html.replace(
-                                &format!("href=\"{}\"", href),
-                                &format!("href=\"{}\"", local_path)
-                            );
-                        }
+        let subdirectory = match resource_type {
+            ResourceType::HTML => "",  // HTML files maintain original structure
+            ResourceType::CSS => "static/css",
+            ResourceType::JavaScript => "static/js",
+            ResourceType::Image => "static/images",
+            ResourceType::Video => "static/video",
+            ResourceType::PDF => "static/pdf",
+            ResourceType::Font => "static/fonts",
+            ResourceType::Other => "static/other",
+        };
+
+        // For HTML files, preserve the original directory structure
+        if *resource_type == ResourceType::HTML {
+            let path_segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+            
+            if path_segments.is_empty() || path == "/" {
+                // Root page
+                return Ok(format!("{}/index.html", self.output_dir));
+            } else {
+                // Create directory structure matching the original URL
+                let dir_path = path_segments[..path_segments.len()-1].join("/");
+                let filename = path_segments.last().unwrap_or(&"index");
+                
+                // Handle trailing slash (directory-like URLs)
+                if path.ends_with('/') {
+                    if dir_path.is_empty() {
+                        return Ok(format!("{}/{}/index.html", self.output_dir, filename));
+                    } else {
+                        return Ok(format!("{}/{}/{}/index.html", self.output_dir, dir_path, filename));
+                    }
+                } else {
+                    // Regular file path
+                    if dir_path.is_empty() {
+                        return Ok(format!("{}/{}.html", self.output_dir, filename));
+                    } else {
+                        return Ok(format!("{}/{}/{}.html", self.output_dir, dir_path, filename));
                     }
                 }
             }
         }
-        
-        // Convert JavaScript links
-        for script in document.find(Name("script")) {
-            if let Some(src) = script.attr("src") {
-                if let Ok(local_path) = self.convert_url_to_local(src) {
-                    modified_html = modified_html.replace(
-                        &format!("src=\"{}\"", src),
-                        &format!("src=\"{}\"", local_path)
-                    );
-                }
+
+        // For non-HTML resources, use the existing logic
+        let filename = path.split('/').next_back().unwrap_or("unknown");
+        let mut unique_filename = filename.to_string();
+        if filename == "index.html" || filename.is_empty() {
+            let host = url.host_str().unwrap_or("unknown");
+            let path_segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+            if path_segments.is_empty() {
+                unique_filename = format!("{}.html", host);
+            } else {
+                unique_filename = format!("{}.html", path_segments.join("_"));
             }
         }
-        
-        // Convert image links
-        for img in document.find(Name("img")) {
-            if let Some(src) = img.attr("src") {
-                if let Ok(local_path) = self.convert_url_to_local(src) {
-                    modified_html = modified_html.replace(
-                        &format!("src=\"{}\"", src),
-                        &format!("src=\"{}\"", local_path)
-                    );
-                }
-            }
-        }
-        
-        // Convert anchor links
-        for link in document.find(Name("a")) {
-            if let Some(href) = link.attr("href") {
-                if let Ok(local_path) = self.convert_url_to_local(href) {
-                    modified_html = modified_html.replace(
-                        &format!("href=\"{}\"", href),
-                        &format!("href=\"{}\"", local_path)
-                    );
-                }
-            }
-        }
-        
-        Ok(modified_html)
+
+        Ok(format!("{}/{}/{}", self.output_dir, subdirectory, unique_filename))
     }
-    
-    fn convert_url_to_local(&self, url: &str) -> Result<String> {
-        let absolute_url = self.resolve_url(url)?;
-        let local_path = self.url_to_local_path(&absolute_url)?;
-        
-        // Convert to relative path
-        if local_path.starts_with("index.html") {
-            Ok("./".to_string())
+
+    fn guess_mime_type(&self, url: &Url, resource_type: &ResourceType) -> String {
+        let path = url.path();
+        let extension = path.split('.').next_back().unwrap_or("").to_lowercase();
+
+        match extension.as_str() {
+            "html" | "htm" => "text/html".to_string(),
+            "css" => "text/css".to_string(),
+            "js" => "application/javascript".to_string(),
+            "jpg" | "jpeg" => "image/jpeg".to_string(),
+            "png" => "image/png".to_string(),
+            "gif" => "image/gif".to_string(),
+            "webp" => "image/webp".to_string(),
+            "svg" => "image/svg+xml".to_string(),
+            "ico" => "image/x-icon".to_string(),
+            "mp4" => "video/mp4".to_string(),
+            "webm" => "video/webm".to_string(),
+            "ogg" => "video/ogg".to_string(),
+            "pdf" => "application/pdf".to_string(),
+            "woff" => "font/woff".to_string(),
+            "woff2" => "font/woff2".to_string(),
+            "ttf" => "font/ttf".to_string(),
+            _ => match resource_type {
+                ResourceType::HTML => "text/html".to_string(),
+                ResourceType::CSS => "text/css".to_string(),
+                ResourceType::JavaScript => "application/javascript".to_string(),
+                ResourceType::Image => "image/jpeg".to_string(),
+                ResourceType::Video => "video/mp4".to_string(),
+                ResourceType::PDF => "application/pdf".to_string(),
+                ResourceType::Font => "font/woff".to_string(),
+                ResourceType::Other => "application/octet-stream".to_string(),
+            },
+        }
+    }
+
+    fn replace_url_in_html(&self, html: &str, original_url: &str, local_path: &str) -> String {
+        let relative_path = self.make_relative_path(local_path);
+        html.replace(original_url, &relative_path)
+    }
+
+    fn make_relative_path(&self, local_path: &str) -> String {
+        // Convert absolute path to relative path from the HTML file location
+        if let Some(relative) = local_path.strip_prefix(&self.output_dir) {
+            relative
+                .strip_prefix('/')
+                .unwrap_or(relative)
+                .to_string()
         } else {
-            Ok(format!("./{}", local_path))
+            local_path.to_string()
         }
     }
-    
-    pub fn url_to_local_path_string(&self, url: &str) -> Result<String> {
-        if url.starts_with("http://") || url.starts_with("https://") {
-            let parsed_url = Url::parse(url)?;
-            self.url_to_local_path(&parsed_url)
-        } else {
-            // For relative URLs, resolve them first
-            let absolute_url = self.resolve_url(url)?;
-            self.url_to_local_path(&absolute_url)
-        }
-    }
-    
-    pub fn extract_background_images_from_css(&self, css_content: &str, resources: &mut Vec<ResourceLink>) {
-        // Extract background-image URLs from CSS content
-        let background_patterns = [
-            r#"background-image:\s*url\(['"]?([^'")\s]+)['"]?\)"#,
-            r#"background:\s*url\(['"]?([^'")\s]+)['"]?\)"#,
-        ];
-        
-        for pattern in &background_patterns {
-            if let Ok(regex) = regex::Regex::new(pattern) {
-                for cap in regex.captures_iter(css_content) {
-                    if let Some(url) = cap.get(1) {
-                        if let Ok(resource) = self.create_resource_link(url.as_str(), ResourceType::Image) {
-                            resources.push(resource);
-                        }
-                    }
-                }
-            }
-        }
-    }
-} 
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
-    fn test_new_html_parser() {
-        let parser = HtmlParser::new("https://example.com/page").unwrap();
-        assert_eq!(parser.base_url.as_str(), "https://example.com/page");
-    }
-
-    #[test]
-    fn test_new_html_parser_invalid_url() {
-        let result = HtmlParser::new("not-a-url");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_extract_resources() {
-        let html_content = r#"
-            <html>
-                <head>
-                    <link rel="stylesheet" href="/static/style.css">
-                    <script src="/static/script.js"></script>
-                </head>
-                <body>
-                    <img src="/static/image.jpg" alt="test">
-                    <a href="/page">Link</a>
-                </body>
-            </html>
-        "#;
+    fn test_url_resolution() {
+        let base_url = Url::parse("https://example.com/page/").unwrap();
+        let parser = HtmlParser::new(base_url, "./output".to_string());
         
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let resources = parser.extract_resources(html_content).unwrap();
-        
-        assert_eq!(resources.len(), 4);
-        
-        let css_resource = resources.iter().find(|r| r.resource_type == ResourceType::CSS).unwrap();
-        assert_eq!(css_resource.original_url, "/static/style.css");
-        
-        let js_resource = resources.iter().find(|r| r.resource_type == ResourceType::JavaScript).unwrap();
-        assert_eq!(js_resource.original_url, "/static/script.js");
-        
-        let img_resource = resources.iter().find(|r| r.resource_type == ResourceType::Image).unwrap();
-        assert_eq!(img_resource.original_url, "/static/image.jpg");
-        
-        let link_resource = resources.iter().find(|r| r.resource_type == ResourceType::Link).unwrap();
-        assert_eq!(link_resource.original_url, "/page");
+        let relative_url = "image.jpg";
+        let resolved = parser.resolve_url(relative_url).unwrap();
+        assert_eq!(resolved.as_str(), "https://example.com/page/image.jpg");
     }
 
     #[test]
-    fn test_extract_resources_with_absolute_urls() {
-        let html_content = r#"
-            <html>
-                <head>
-                    <link rel="stylesheet" href="https://cdn.example.com/style.css">
-                    <script src="https://cdn.example.com/script.js"></script>
-                </head>
-                <body>
-                    <img src="https://cdn.example.com/image.jpg" alt="test">
-                </body>
-            </html>
-        "#;
-        
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let resources = parser.extract_resources(html_content).unwrap();
-        
-        assert_eq!(resources.len(), 3);
-        
-        let css_resource = resources.iter().find(|r| r.resource_type == ResourceType::CSS).unwrap();
-        assert_eq!(css_resource.original_url, "https://cdn.example.com/style.css");
+    fn test_resource_type_detection() {
+        let base_url = Url::parse("https://example.com/").unwrap();
+        let parser = HtmlParser::new(base_url, "./output".to_string());
+
+        let image_url = Url::parse("https://example.com/image.png").unwrap();
+        let resource_type = parser.determine_resource_type(&image_url);
+        assert!(matches!(resource_type, ResourceType::Image));
     }
 
     #[test]
-    fn test_extract_resources_with_relative_urls() {
-        let html_content = r#"
-            <html>
-                <head>
-                    <link rel="stylesheet" href="../style.css">
-                    <script src="./script.js"></script>
-                </head>
-                <body>
-                    <img src="images/photo.jpg" alt="test">
-                </body>
-            </html>
-        "#;
-        
-        let parser = HtmlParser::new("https://example.com/subdir/").unwrap();
-        let resources = parser.extract_resources(html_content).unwrap();
-        
-        assert_eq!(resources.len(), 3);
+    fn test_protocol_relative_url_resolution() {
+        let base_url = Url::parse("http://example.com/page/").unwrap();
+        let parser = HtmlParser::new(base_url, "./output".to_string());
+
+        let resolved = parser.resolve_url("//cdn.example.com/lib.js").unwrap();
+        assert_eq!(resolved.as_str(), "http://cdn.example.com/lib.js");
     }
 
     #[test]
-    fn test_extract_resources_with_data_urls() {
-        let html_content = r#"
-            <html>
-                <body>
-                    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" alt="test">
-                </body>
-            </html>
-        "#;
-        
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let resources = parser.extract_resources(html_content).unwrap();
-        
-        // Data URLs should be ignored
-        assert_eq!(resources.len(), 0);
+    fn test_extensionless_path_is_html() {
+        let base_url = Url::parse("https://example.com/").unwrap();
+        let parser = HtmlParser::new(base_url, "./output".to_string());
+
+        let about = Url::parse("https://example.com/about").unwrap();
+        assert_eq!(parser.determine_resource_type(&about), ResourceType::HTML);
     }
 
     #[test]
-    fn test_extract_resources_with_malformed_html() {
-        let html_content = r#"
-            <html>
-                <head>
-                    <link rel="stylesheet" href="/static/style.css
-                    <script src="/static/script.js
-                </head>
-                <body>
-                    <img src="/static/image.jpg alt="test">
-                </body>
-            </html>
-        "#;
-        
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let resources = parser.extract_resources(html_content).unwrap();
-        
-        // Should still extract what it can
-        assert!(resources.len() > 0);
+    fn test_absolute_path_resolution() {
+        let base_url = Url::parse("https://example.com/page/").unwrap();
+        let parser = HtmlParser::new(base_url, "./output".to_string());
+        let resolved = parser.resolve_url("/assets/app.css").unwrap();
+        assert_eq!(resolved.as_str(), "https://example.com/assets/app.css");
     }
 
     #[test]
-    fn test_url_to_local_path_string_absolute() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let result = parser.url_to_local_path_string("https://example.com/image.jpg").unwrap();
-        assert_eq!(result, "image.jpg");
+    fn test_absolute_https_url_resolution() {
+        let base_url = Url::parse("https://example.com/").unwrap();
+        let parser = HtmlParser::new(base_url, "./output".to_string());
+        let resolved = parser
+            .resolve_url("https://cdn.example.com/lib.js")
+            .unwrap();
+        assert_eq!(resolved.as_str(), "https://cdn.example.com/lib.js");
     }
 
     #[test]
-    fn test_url_to_local_path_string_relative() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let result = parser.url_to_local_path_string("/image.jpg").unwrap();
-        assert_eq!(result, "image.jpg");
+    fn test_skips_data_and_fragment_urls() {
+        let base_url = Url::parse("https://example.com/").unwrap();
+        let parser = HtmlParser::new(base_url, "./output".to_string());
+        assert!(parser.resolve_url("#section").is_err());
+        assert!(parser.resolve_url("data:image/png;base64,abc").is_err());
     }
 
     #[test]
-    fn test_url_to_local_path_string_root() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let result = parser.url_to_local_path_string("https://example.com/").unwrap();
-        assert_eq!(result, "index.html");
+    fn extracts_urls_from_inline_css() {
+        let html = r#"<html><head><style>
+            @import "imported.css";
+            body { background: url(bg.png); }
+        </style></head></html>"#;
+        let base_url = Url::parse("https://example.com/").unwrap();
+        let parser = HtmlParser::new(base_url, "./output".to_string());
+        let (_, resources) = parser.parse_html(html).unwrap();
+        assert!(
+            resources
+                .iter()
+                .any(|r| r.url.path().ends_with("imported.css"))
+        );
+        assert!(
+            resources.iter().any(|r| r.url.path().ends_with("bg.png"))
+        );
     }
 
     #[test]
-    fn test_url_to_local_path_string_directory() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let result = parser.url_to_local_path_string("https://example.com/dir/").unwrap();
-        assert_eq!(result, "dir/index.html");
+    fn guess_mime_type_falls_back_to_resource_type() {
+        let base_url = Url::parse("https://example.com/").unwrap();
+        let parser = HtmlParser::new(base_url, "./output".to_string());
+        let url = Url::parse("https://example.com/no-extension").unwrap();
+        assert_eq!(
+            parser.guess_mime_type(&url, &ResourceType::JavaScript),
+            "application/javascript"
+        );
     }
 
     #[test]
-    fn test_url_to_local_path_string_no_extension() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let result = parser.url_to_local_path_string("https://example.com/page").unwrap();
-        assert_eq!(result, "page/index.html");
-    }
-
-    #[test]
-    fn test_url_to_local_path_string_with_query() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let result = parser.url_to_local_path_string("https://example.com/page?param=value").unwrap();
-        assert_eq!(result, "page/index.html?param=value");
-    }
-
-    #[test]
-    fn test_sanitize_path() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        
-        assert_eq!(parser.sanitize_path("normal/path"), "normal/path");
-        assert_eq!(parser.sanitize_path("path with spaces"), "path_with_spaces");
-        assert_eq!(parser.sanitize_path("path?with=query"), "path?with=query");
-        assert_eq!(parser.sanitize_path("path#fragment"), "path_fragment");
-        assert_eq!(parser.sanitize_path("path&with&ampersands"), "path_with_ampersands");
-    }
-
-    #[test]
-    fn test_resolve_url_absolute() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let result = parser.resolve_url("https://cdn.example.com/style.css").unwrap();
-        assert_eq!(result.as_str(), "https://cdn.example.com/style.css");
-    }
-
-    #[test]
-    fn test_resolve_url_relative() {
-        let parser = HtmlParser::new("https://example.com/subdir/").unwrap();
-        let result = parser.resolve_url("../style.css").unwrap();
-        assert_eq!(result.as_str(), "https://example.com/style.css");
-    }
-
-    #[test]
-    fn test_resolve_url_protocol_relative() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let result = parser.resolve_url("//cdn.example.com/style.css").unwrap();
-        assert_eq!(result.as_str(), "https://cdn.example.com/style.css");
-    }
-
-    #[test]
-    fn test_resolve_url_invalid() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        // Test with a URL that should actually be invalid (data URL)
-        let result = parser.resolve_url("data:image/png;base64,data");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_extract_background_images_from_css() {
-        let css_content = r#"
-            .bg1 { background-image: url('/images/bg1.jpg'); }
-            .bg2 { background: url('/images/bg2.jpg'); }
-            .bg3 { background-image: url('/images/bg3.jpg'); }
-        "#;
-        
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let mut resources = Vec::new();
-        parser.extract_background_images_from_css(css_content, &mut resources);
-        
-        assert_eq!(resources.len(), 3);
-        
-        let urls: Vec<String> = resources.iter().map(|r| r.original_url.clone()).collect();
-        assert!(urls.contains(&"/images/bg1.jpg".to_string()));
-        assert!(urls.contains(&"/images/bg2.jpg".to_string()));
-        assert!(urls.contains(&"/images/bg3.jpg".to_string()));
-    }
-
-    #[test]
-    fn test_extract_background_images_from_css_with_quotes() {
-        let css_content = r#"
-            .bg1 { background-image: url("/images/bg1.jpg"); }
-            .bg2 { background: url('/images/bg2.jpg'); }
-        "#;
-        
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let mut resources = Vec::new();
-        parser.extract_background_images_from_css(css_content, &mut resources);
-        
-        assert_eq!(resources.len(), 2);
-    }
-
-    #[test]
-    fn test_extract_background_images_from_css_no_matches() {
-        let css_content = r#"
-            .bg1 { background-color: red; }
-            .bg2 { color: blue; }
-        "#;
-        
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let mut resources = Vec::new();
-        parser.extract_background_images_from_css(css_content, &mut resources);
-        
-        assert_eq!(resources.len(), 0);
-    }
-
-    #[test]
-    fn test_create_resource_link() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        
-        let resource = parser.create_resource_link("/style.css", ResourceType::CSS).unwrap();
-        assert_eq!(resource.original_url, "/style.css");
-        assert_eq!(resource.resource_type, ResourceType::CSS);
-        
-        let resource = parser.create_resource_link("/script.js", ResourceType::JavaScript).unwrap();
-        assert_eq!(resource.original_url, "/script.js");
-        assert_eq!(resource.resource_type, ResourceType::JavaScript);
-        
-        let resource = parser.create_resource_link("/image.jpg", ResourceType::Image).unwrap();
-        assert_eq!(resource.original_url, "/image.jpg");
-        assert_eq!(resource.resource_type, ResourceType::Image);
-        
-        let resource = parser.create_resource_link("/page", ResourceType::Link).unwrap();
-        assert_eq!(resource.original_url, "/page");
-        assert_eq!(resource.resource_type, ResourceType::Link);
-    }
-
-    #[test]
-    fn test_create_resource_link_with_data_url() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let result = parser.create_resource_link("data:image/png;base64,data", ResourceType::Image);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_create_resource_link_with_fragment() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let result = parser.create_resource_link("#fragment", ResourceType::Link);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_create_resource_link_with_mailto() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let result = parser.create_resource_link("mailto:test@example.com", ResourceType::Link);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_create_resource_link_with_tel() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let result = parser.create_resource_link("tel:+1234567890", ResourceType::Link);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_create_resource_link_with_javascript() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let result = parser.create_resource_link("javascript:alert('test')", ResourceType::Link);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_resource_link_clone() {
-        let resource = ResourceLink {
-            original_url: "/test.css".to_string(),
-            local_path: "/local/test.css".to_string(),
-            resource_type: ResourceType::CSS,
-        };
-        
-        let cloned = resource.clone();
-        assert_eq!(cloned.original_url, resource.original_url);
-        assert_eq!(cloned.local_path, resource.local_path);
-        assert_eq!(cloned.resource_type, resource.resource_type);
-    }
-
-    #[test]
-    fn test_resource_type_debug() {
-        assert_eq!(format!("{:?}", ResourceType::CSS), "CSS");
-        assert_eq!(format!("{:?}", ResourceType::JavaScript), "JavaScript");
-        assert_eq!(format!("{:?}", ResourceType::Image), "Image");
-        assert_eq!(format!("{:?}", ResourceType::Link), "Link");
-        assert_eq!(format!("{:?}", ResourceType::Other), "Other");
-    }
-
-    #[test]
-    fn test_resource_type_clone() {
-        let css_type = ResourceType::CSS;
-        let cloned = css_type.clone();
-        assert_eq!(cloned, css_type);
-    }
-
-    #[test]
-    fn test_html_parser_debug() {
-        let parser = HtmlParser::new("https://example.com").unwrap();
-        let debug_str = format!("{:?}", parser);
-        assert!(debug_str.contains("HtmlParser"));
-        assert!(debug_str.contains("example.com"));
+    fn make_relative_path_strips_output_prefix() {
+        let base_url = Url::parse("https://example.com/").unwrap();
+        let parser = HtmlParser::new(base_url, "/output".to_string());
+        let relative = parser.make_relative_path("/output/static/css/app.css");
+        assert_eq!(relative, "static/css/app.css");
     }
 } 

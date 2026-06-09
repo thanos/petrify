@@ -8,180 +8,79 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: write
+
 jobs:
-  build-and-release:
-    name: Build and Release
+  build:
+    name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
         include:
           - os: ubuntu-latest
-            artifact_name: website-mirror-linux-x86_64
-            binary_name: website-mirror
+            target: x86_64-unknown-linux-gnu
+            artifact: petrify-x86_64-unknown-linux-gnu
+            archive: tar.gz
+            bin: petrify
           - os: windows-latest
-            artifact_name: website-mirror-windows-x86_64
-            binary_name: website-mirror.exe
+            target: x86_64-pc-windows-msvc
+            artifact: petrify-x86_64-pc-windows-msvc
+            archive: zip
+            bin: petrify.exe
           - os: macos-latest
-            artifact_name: website-mirror-macos-x86_64
-            binary_name: website-mirror
+            target: x86_64-apple-darwin
+            artifact: petrify-x86_64-apple-darwin
+            archive: tar.gz
+            bin: petrify
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Package (Unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czf ${{ matrix.artifact }}.${{ matrix.archive }} ${{ matrix.bin }}
+          mv ${{ matrix.artifact }}.${{ matrix.archive }} ../../../
+      - name: Package (Windows)
+        if: matrix.archive == 'zip'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ${{ matrix.artifact }}.${{ matrix.archive }} ${{ matrix.bin }}
+          mv ${{ matrix.artifact }}.${{ matrix.archive }} ../../../
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.${{ matrix.archive }}
 
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@v1
-      with:
-        toolchain: stable
-
-    - name: Cache Rust dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-stable-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Build release binary
-      run: cargo build --release
-
-    - name: Strip binary (Linux)
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        strip target/release/${{ matrix.binary_name }}
-        echo "Binary size after stripping: $(stat -c%s target/release/${{ matrix.binary_name }}) bytes"
-
-    - name: Strip binary (macOS)
-      if: matrix.os == 'macos-latest'
-      run: |
-        strip target/release/${{ matrix.binary_name }}
-        echo "Binary size after stripping: $(stat -f%z target/release/${{ matrix.binary_name }}) bytes"
-
-    - name: Create release archive
-      run: |
-        cd target/release
-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          7z a -tzip ${{ matrix.artifact_name }}.zip ${{ matrix.binary_name }}
-        else
-          tar -czf ${{ matrix.artifact_name }}.tar.gz ${{ matrix.binary_name }}
-        fi
-
-    - name: Upload release artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: ${{ matrix.artifact_name }}
-        path: target/release/${{ matrix.artifact_name }}.*
-
-  create-release:
-    name: Create Release
-    needs: build-and-release
+  github-release:
+    name: GitHub Release
+    needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/*
 
-    - name: Download all artifacts
-      uses: actions/download-artifact@v3
-
-    - name: Extract version from Cargo.toml
-      id: version
-      run: |
-        VERSION=$(grep '^version = ' Cargo.toml | cut -d '"' -f2)
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Extracted version: $VERSION"
-
-    - name: Generate changelog
-      id: changelog
-      run: |
-        # Get the previous tag
-        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
-        
-        if [ -n "$PREVIOUS_TAG" ]; then
-          # Generate changelog from previous tag
-          CHANGELOG=$(git log --pretty=format:"- %s" ${PREVIOUS_TAG}..HEAD | grep -v "Merge pull request" | grep -v "Merge branch")
-        else
-          # First release
-          CHANGELOG=$(git log --pretty=format:"- %s" | grep -v "Merge pull request" | grep -v "Merge branch" | head -20)
-        fi
-        
-        echo "changelog<<EOF" >> $GITHUB_OUTPUT
-        echo "$CHANGELOG" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-
-    - name: Create Release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: Website Mirror ${{ steps.version.outputs.version }}
-        body: |
-          ## What's Changed
-          
-          ${{ steps.changelog.outputs.changelog }}
-          
-          ## Downloads
-          
-          ### Linux (x86_64)
-          - [website-mirror-linux-x86_64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref }}/website-mirror-linux-x86_64.tar.gz)
-          
-          ### Windows (x86_64)
-          - [website-mirror-windows-x86_64.zip](https://github.com/${{ github.repository }}/releases/download/${{ github.ref }}/website-mirror-windows-x86_64.zip)
-          
-          ### macOS (x86_64)
-          - [website-mirror-macos-x86_64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref }}/website-mirror-macos-x86_64.tar.gz)
-          
-          ## Installation
-          
-          ### Linux/macOS
-          ```bash
-          tar -xzf website-mirror-linux-x86_64.tar.gz
-          chmod +x website-mirror
-          ./website-mirror --help
-          ```
-          
-          ### Windows
-          ```powershell
-          Expand-Archive website-mirror-windows-x86_64.zip
-          .\website-mirror.exe --help
-          ```
-          
-          ## Features
-          
-          - 🌐 Mirror websites with static copies
-          - 📱 Download HTML, CSS, JavaScript, and images
-          - 🖼️ Convert images to WebP format
-          - 💾 Persistent download store
-          - 🔄 Full recursive mirroring
-          - 🎯 Resource type filtering
-          - 🚀 High-performance concurrent downloads
-        draft: false
-        prerelease: false
-
-    - name: Upload Release Assets
-      run: |
-        # Upload Linux binary
-        gh release upload ${{ github.ref }} website-mirror-linux-x86_64/website-mirror-linux-x86_64.tar.gz
-        
-        # Upload Windows binary
-        gh release upload ${{ github.ref }} website-mirror-windows-x86_64/website-mirror-windows-x86_64.zip
-        
-        # Upload macOS binary
-        gh release upload ${{ github.ref }} website-mirror-macos-x86_64/website-mirror-macos-x86_64.tar.gz
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  notify:
-    name: Notify Release
-    needs: create-release
+  publish-crates-io:
+    name: Publish to crates.io
+    needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    
     steps:
-    - name: Notify on success
-      run: |
-        echo "🎉 Release ${{ github.ref }} created successfully!"
-        echo "📦 All binaries built and uploaded"
-        echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref }}" 
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}

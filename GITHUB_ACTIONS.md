@@ -47,9 +47,9 @@ git push origin v1.0.0
 ```
 
 **Release Assets Created**:
-- `website-mirror-linux-x86_64.tar.gz` - Linux binary
-- `website-mirror-windows-x86_64.zip` - Windows binary  
-- `website-mirror-macos-x86_64.tar.gz` - macOS binary
+- `petrify-x86_64-unknown-linux-gnu.tar.gz` - Linux binary
+- `petrify-x86_64-pc-windows-msvc.zip` - Windows binary
+- `petrify-x86_64-apple-darwin.tar.gz` - macOS binary
 
 ### 3. **Dependencies Workflow** (`.github/workflows/dependencies.yml`)
 **Triggers**: Weekly schedule (Mondays 2 AM UTC), Manual dispatch
@@ -179,4 +179,4 @@ To improve these workflows:
 
 ## 📄 License
 
-These workflows are part of the website-mirror project and follow the same license terms. 
+These workflows are part of the petrify project and follow the same license terms. 

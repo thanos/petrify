@@ -2,174 +2,24 @@ name: Code Quality
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
-  code-quality:
-    name: Code Quality
+  quality:
+    name: Lint, docs, and deny
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@v1
-      with:
-        toolchain: stable
-
-    - name: Cache Rust dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-stable-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Check code formatting
-      run: cargo fmt --all -- --check
-
-    - name: Check clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
-
-    - name: Check documentation
-      run: cargo doc --no-deps --document-private-items
-
-    - name: Check documentation warnings
-      run: cargo doc --no-deps --document-private-items --message-format=short 2>&1 | grep -E "(warning|error)" || true
-
-    - name: Check for unused dependencies
-      run: cargo check --all-targets --all-features
-
-    - name: Check for dead code
-      run: cargo check --all-targets --all-features --message-format=short 2>&1 | grep -E "unused|dead" || true
-
-    - name: Run cargo deny
-      uses: EmbarkStudios/cargo-deny-action@v1
-      with:
-        command: check
-
-    - name: Check for license compliance
-      run: |
-        echo "Checking license compliance..."
-        cargo license --json | jq -r '.[] | select(.license | test("MIT|Apache|BSD|ISC|CC0|Unlicense|Zlib|Boost|MPL|GPL|LGPL") | not) | "⚠️  Non-standard license: \(.name) - \(.license)"' || echo "✅ All licenses are standard open source licenses"
-
-    - name: Check for security issues
-      run: |
-        cargo install cargo-audit
-        cargo audit
-
-    - name: Check for outdated dependencies
-      run: |
-        cargo install cargo-outdated
-        cargo outdated || echo "✅ All dependencies are up to date"
-
-    - name: Generate dependency graph
-      run: |
-        cargo install cargo-deps
-        cargo deps --build-shape box --build-direction LR --optional-deps --all-features --output-file deps.svg
-
-    - name: Upload dependency graph
-      uses: actions/upload-artifact@v3
-      with:
-        name: dependency-graph
-        path: deps.svg
-
-  benchmark:
-    name: Benchmark
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@v1
-      with:
-        toolchain: stable
-
-    - name: Cache Rust dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-stable-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Install criterion
-      run: cargo install cargo-criterion
-
-    - name: Run benchmarks
-      run: cargo criterion --message-format=json --output-format=github
-
-    - name: Upload benchmark results
-      uses: actions/upload-artifact@v3
-      with:
-        name: benchmark-results
-        path: target/criterion/
-
-  code-coverage:
-    name: Code Coverage
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@v1
-      with:
-        toolchain: stable
-
-    - name: Cache Rust dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-stable-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Install cargo-tarpaulin
-      run: cargo install cargo-tarpaulin
-
-    - name: Run coverage
-      run: cargo tarpaulin --out Html --output-dir coverage --all-features
-
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage/tarpaulin-report.html
-        flags: code-quality
-        name: codecov-umbrella
-
-    - name: Upload coverage artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: coverage-report
-        path: coverage/
-
-  notify-quality:
-    name: Notify Quality
-    runs-on: ubuntu-latest
-    needs: [code-quality, benchmark, code-coverage]
-    if: always()
-    
-    steps:
-    - name: Quality check summary
-      run: |
-        echo "🔍 Code Quality Check Summary"
-        echo "=============================="
-        echo "✅ Code formatting: PASSED"
-        echo "✅ Clippy linting: PASSED"
-        echo "✅ Documentation: PASSED"
-        echo "✅ Dependencies: PASSED"
-        echo "✅ Security audit: PASSED"
-        echo "✅ License compliance: PASSED"
-        echo ""
-        echo "📊 Coverage and benchmarks completed"
-        echo "📋 Check artifacts for detailed reports" 
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - uses: EmbarkStudios/cargo-deny-action@v2

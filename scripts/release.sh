@@ -187,11 +187,13 @@ Tag: $tag
 Status: Ready for GitHub Actions
 
 Next Steps:
-1. GitHub Actions will automatically:
+1. Ensure CRATES_IO_TOKEN is set in GitHub repository secrets.
+
+2. GitHub Actions will automatically:
    - Build binaries for Linux, Windows, and macOS
    - Create a GitHub release
    - Upload release assets
-   - Generate changelog
+   - Publish petrify to crates.io
 
 2. Monitor the release workflow:
    https://github.com/\$(git config --get remote.origin.url | sed 's/.*github.com[:/]\([^/]*\)\/\([^.]*\).*/\\1\/\\2/')/actions
