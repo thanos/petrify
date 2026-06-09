@@ -20,11 +20,8 @@ const ABOUT_HTML: &str = r#"<!DOCTYPE html><html><body><p>About</p><link rel="st
 fn tiny_png() -> Vec<u8> {
     let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 128, 255, 255]));
     let mut buf = Vec::new();
-    img.write_to(
-        &mut std::io::Cursor::new(&mut buf),
-        image::ImageOutputFormat::Png,
-    )
-    .unwrap();
+    img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+        .unwrap();
     buf
 }
 

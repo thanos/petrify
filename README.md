@@ -1,5 +1,13 @@
 # Petrify
 
+[![crates.io](https://img.shields.io/crates/v/petrify.svg)](https://crates.io/crates/petrify)
+[![docs.rs](https://docs.rs/petrify/badge.svg)](https://docs.rs/petrify)
+[![CI](https://github.com/thanos/petrify/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/thanos/petrify/actions/workflows/ci.yml)
+[![Code Quality](https://github.com/thanos/petrify/actions/workflows/code-quality.yml/badge.svg?branch=main)](https://github.com/thanos/petrify/actions/workflows/code-quality.yml)
+[![Coverage Status](https://coveralls.io/repos/github/thanos/petrify/badge.svg?branch=main)](https://coveralls.io/github/thanos/petrify?branch=main)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![MSRV](https://img.shields.io/badge/MSRV-1.74-blue)](Cargo.toml)
+
 Petrify is a command-line tool that downloads a website and produces a static copy suitable for offline browsing. It crawls HTML pages on the target host, extracts linked assets, rewrites URLs to local paths, and saves everything to disk.
 
 Petrify is similar in purpose to `wget --mirror`, with built-in link rewriting, concurrent downloads, and optional image conversion to WebP.
