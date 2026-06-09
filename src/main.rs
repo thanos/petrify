@@ -1,228 +1,101 @@
 use clap::Parser;
-use anyhow::Result;
+use log::{error, info};
+use petrify::config::Config;
+use petrify::engine::Petrifier;
 
-use website_mirror::{cli::MirrorCommand, downloader::WebsiteMirror};
+#[derive(Parser)]
+#[command(name = "petrify")]
+#[command(about = "Petrify live websites into static offline copies")]
+#[command(version)]
+struct Cli {
+    /// Target URL to petrify
+    #[arg(required = true)]
+    url: String,
+
+    /// Maximum crawling depth
+    #[arg(short, long, default_value = "unlimited")]
+    depth: String,
+
+    /// Maximum number of pages to scan and process (for testing)
+    #[arg(long, default_value_t = 0)]
+    max_pages: usize,
+
+    /// Download only specific resource types
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "js,css,images,video,html,pdf"
+    )]
+    download_only: Vec<String>,
+
+    /// Maximum concurrent workers
+    #[arg(short, long, default_value_t = num_cpus::get())]
+    max_concurrent: usize,
+
+    /// Output directory for the petrified site
+    #[arg(short, long, default_value = "./petrified_site")]
+    output: String,
+
+    /// Download external resources
+    #[arg(long, default_value_t = true)]
+    download_external: bool,
+
+    /// Convert JPEG/PNG images to WebP format
+    #[arg(long, default_value_t = true)]
+    convert_to_webp: bool,
+
+    /// WebP quality (1-100)
+    #[arg(long, default_value_t = 75)]
+    webp_quality: u8,
+
+    /// Use lossless WebP compression
+    #[arg(long, default_value_t = false)]
+    webp_lossless: bool,
+
+    /// Ignore robots.txt restrictions
+    #[arg(short, long, default_value_t = true)]
+    ignore_robots: bool,
+
+    /// Request timeout in seconds
+    #[arg(long, default_value_t = 270)]
+    timeout: u64,
+}
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let args = MirrorCommand::parse();
-    
-    // Handle full mirror option
-    let (max_depth, max_concurrent, ignore_robots, download_external) = if args.full_mirror {
-        // Full mirror: unlimited depth crawling of target site + all media files from any site
-        (0, 100, true, true)
-    } else {
-        // Standard mirror: limited depth + all media files from any site (ensures no 404s)
-        (args.max_depth, args.max_concurrent, args.ignore_robots, true)
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
+
+    let cli = Cli::parse();
+
+    info!("Starting petrify");
+    info!("Target URL: {}", cli.url);
+    info!("Output directory: {}", cli.output);
+
+    let config = Config {
+        url: cli.url,
+        depth: cli.depth,
+        max_pages: cli.max_pages,
+        download_only: cli.download_only,
+        max_concurrent: cli.max_concurrent,
+        output: cli.output,
+        download_external: cli.download_external,
+        convert_to_webp: cli.convert_to_webp,
+        webp_quality: cli.webp_quality,
+        webp_lossless: cli.webp_lossless,
+        ignore_robots: cli.ignore_robots,
+        timeout: cli.timeout,
     };
-    
-                let mut mirror = WebsiteMirror::new(
-                &args.url,
-                &args.output_dir,
-                max_depth,
-                max_concurrent,
-                ignore_robots,
-                download_external,
-                args.only_resources.clone(),
-                args.convert_to_webp,
-            )?;
-    
-    mirror.mirror_website().await?;
-    
-    println!("✅ Website mirroring completed successfully!");
-    Ok(())
-} 
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    let mut petrifier = Petrifier::new(config).await?;
 
-    #[test]
-    fn test_parse_args() {
-        let args = vec![
-            "website-mirror".to_string(),
-            "https://example.com".to_string(),
-            "-o".to_string(),
-            "./output".to_string(),
-        ];
-        
-        let result = MirrorCommand::try_parse_from(args);
-        assert!(result.is_ok());
-        
-        let cmd = result.unwrap();
-        assert_eq!(cmd.url, "https://example.com");
-        assert_eq!(cmd.output_dir.to_string_lossy(), "./output");
+    match petrifier.run().await {
+        Ok(_) => {
+            info!("Petrify completed successfully!");
+            Ok(())
+        }
+        Err(e) => {
+            error!("Petrify failed: {}", e);
+            Err(e.into())
+        }
     }
-
-    #[test]
-    fn test_parse_args_with_full_mirror() {
-        let args = vec![
-            "website-mirror".to_string(),
-            "https://example.com".to_string(),
-            "-o".to_string(),
-            "./output".to_string(),
-            "--full-mirror".to_string(),
-        ];
-        
-        let result = MirrorCommand::try_parse_from(args);
-        assert!(result.is_ok());
-        
-        let cmd = result.unwrap();
-        assert_eq!(cmd.url, "https://example.com");
-        assert_eq!(cmd.output_dir.to_string_lossy(), "./output");
-        assert!(cmd.full_mirror);
-    }
-
-    #[test]
-    fn test_parse_args_with_convert_to_webp() {
-        let args = vec![
-            "website-mirror".to_string(),
-            "https://example.com".to_string(),
-            "-o".to_string(),
-            "./output".to_string(),
-            "--convert-to-webp".to_string(),
-        ];
-        
-        let result = MirrorCommand::try_parse_from(args);
-        assert!(result.is_ok());
-        
-        let cmd = result.unwrap();
-        assert_eq!(cmd.url, "https://example.com");
-        assert_eq!(cmd.output_dir.to_string_lossy(), "./output");
-        assert!(cmd.convert_to_webp);
-    }
-
-    #[test]
-    fn test_parse_args_with_only_resources() {
-        let args = vec![
-            "website-mirror".to_string(),
-            "https://example.com".to_string(),
-            "-o".to_string(),
-            "./output".to_string(),
-            "--only-resources".to_string(),
-            "images,css".to_string(),
-        ];
-        
-        let result = MirrorCommand::try_parse_from(args);
-        assert!(result.is_ok());
-        
-        let cmd = result.unwrap();
-        assert_eq!(cmd.url, "https://example.com");
-        assert_eq!(cmd.output_dir.to_string_lossy(), "./output");
-        assert_eq!(cmd.only_resources, Some(vec!["images".to_string(), "css".to_string()]));
-    }
-
-    #[test]
-    fn test_parse_args_with_depth_and_concurrent() {
-        let args = vec![
-            "website-mirror".to_string(),
-            "https://example.com".to_string(),
-            "-o".to_string(),
-            "./output".to_string(),
-            "-d".to_string(),
-            "5".to_string(),
-            "-c".to_string(),
-            "20".to_string(),
-        ];
-        
-        let result = MirrorCommand::try_parse_from(args);
-        assert!(result.is_ok());
-        
-        let cmd = result.unwrap();
-        assert_eq!(cmd.url, "https://example.com");
-        assert_eq!(cmd.output_dir.to_string_lossy(), "./output");
-        assert_eq!(cmd.max_depth, 5);
-        assert_eq!(cmd.max_concurrent, 20);
-    }
-
-    #[test]
-    fn test_parse_args_with_ignore_robots() {
-        let args = vec![
-            "website-mirror".to_string(),
-            "https://example.com".to_string(),
-            "-o".to_string(),
-            "./output".to_string(),
-            "--ignore-robots".to_string(),
-        ];
-        
-        let result = MirrorCommand::try_parse_from(args);
-        assert!(result.is_ok());
-        
-        let cmd = result.unwrap();
-        assert_eq!(cmd.url, "https://example.com");
-        assert_eq!(cmd.output_dir.to_string_lossy(), "./output");
-        assert!(cmd.ignore_robots);
-    }
-
-    #[test]
-    fn test_parse_args_with_download_external() {
-        let args = vec![
-            "website-mirror".to_string(),
-            "https://example.com".to_string(),
-            "-o".to_string(),
-            "./output".to_string(),
-            "--download-external".to_string(),
-        ];
-        
-        let result = MirrorCommand::try_parse_from(args);
-        assert!(result.is_ok());
-        
-        let cmd = result.unwrap();
-        assert_eq!(cmd.url, "https://example.com");
-        assert_eq!(cmd.output_dir.to_string_lossy(), "./output");
-        assert!(cmd.download_external);
-    }
-
-    #[test]
-    fn test_parse_args_missing_url() {
-        let args = vec![
-            "website-mirror".to_string(),
-            "-o".to_string(),
-            "./output".to_string(),
-        ];
-        
-        let result = MirrorCommand::try_parse_from(args);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_args_missing_output() {
-        let args = vec![
-            "website-mirror".to_string(),
-            "https://example.com".to_string(),
-        ];
-        
-        let result = MirrorCommand::try_parse_from(args);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_args_invalid_depth() {
-        let args = vec![
-            "website-mirror".to_string(),
-            "https://example.com".to_string(),
-            "-o".to_string(),
-            "./output".to_string(),
-            "-d".to_string(),
-            "0".to_string(),
-        ];
-        
-        let result = MirrorCommand::try_parse_from(args);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_args_invalid_concurrent() {
-        let args = vec![
-            "website-mirror".to_string(),
-            "https://example.com".to_string(),
-            "-o".to_string(),
-            "./output".to_string(),
-            "-c".to_string(),
-            "0".to_string(),
-        ];
-        
-        let result = MirrorCommand::try_parse_from(args);
-        assert!(result.is_err());
-    }
-} 
+}

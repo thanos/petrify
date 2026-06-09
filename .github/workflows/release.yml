@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: petrify-x86_64-unknown-linux-gnu
+            archive: tar.gz
+            bin: petrify
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: petrify-x86_64-pc-windows-msvc
+            archive: zip
+            bin: petrify.exe
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: petrify-x86_64-apple-darwin
+            archive: tar.gz
+            bin: petrify
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Package (Unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czf ${{ matrix.artifact }}.${{ matrix.archive }} ${{ matrix.bin }}
+          mv ${{ matrix.artifact }}.${{ matrix.archive }} ../../../
+      - name: Package (Windows)
+        if: matrix.archive == 'zip'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ${{ matrix.artifact }}.${{ matrix.archive }} ${{ matrix.bin }}
+          mv ${{ matrix.artifact }}.${{ matrix.archive }} ../../../
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.${{ matrix.archive }}
+
+  github-release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/*
+
+  publish-crates-io:
+    name: Publish to crates.io
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}

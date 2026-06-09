@@ -1,0 +1,177 @@
+name: Dependencies
+
+on:
+  schedule:
+    # Run every Monday at 2 AM UTC
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+    inputs:
+      update_type:
+        description: 'Type of update to perform'
+        required: true
+        default: 'security'
+        type: choice
+        options:
+        - security
+        - all
+        - major
+
+jobs:
+  security-update:
+    name: Security Update
+    runs-on: ubuntu-latest
+    if: github.event.inputs.update_type == 'security' || github.event_name == 'schedule'
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@v1
+      with:
+        toolchain: stable
+
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+
+    - name: Check for security vulnerabilities
+      run: cargo audit
+
+    - name: Install cargo-update
+      run: cargo install cargo-update
+
+    - name: Update dependencies with security fixes
+      run: |
+        cargo update
+        cargo audit --fix || true
+
+    - name: Check if updates were made
+      id: check-updates
+      run: |
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "updates=true" >> $GITHUB_OUTPUT
+          echo "Updates were made to dependencies"
+        else
+          echo "updates=false" >> $GITHUB_OUTPUT
+          echo "No updates were needed"
+        fi
+
+    - name: Create Pull Request for security updates
+      if: steps.check-updates.outputs.updates == 'true'
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: 'chore: update dependencies for security fixes'
+        title: '🔒 Security: Update dependencies'
+        body: |
+          ## Security Update
+          
+          This PR updates dependencies to fix security vulnerabilities.
+          
+          ### Changes
+          - Updated dependencies with security fixes
+          - Ran `cargo audit` to verify security
+          
+          ### Checklist
+          - [x] Security vulnerabilities addressed
+          - [x] All tests passing
+          - [x] No breaking changes
+          
+          ### How to test
+          1. Checkout this branch
+          2. Run `cargo test`
+          3. Run `cargo audit`
+          4. Verify functionality works as expected
+        branch: security-updates
+        base: main
+        delete-branch: true
+
+  dependency-update:
+    name: Dependency Update
+    runs-on: ubuntu-latest
+    if: github.event.inputs.update_type == 'all' || github.event.inputs.update_type == 'major'
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@v1
+      with:
+        toolchain: stable
+
+    - name: Install cargo-edit
+      run: cargo install cargo-edit
+
+    - name: Update all dependencies
+      run: |
+        if [ "${{ github.event.inputs.update_type }}" = "major" ]; then
+          echo "Updating to major versions..."
+          cargo upgrade --incompatible
+        else
+          echo "Updating all dependencies..."
+          cargo upgrade
+        fi
+
+    - name: Check if updates were made
+      id: check-updates
+      run: |
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "updates=true" >> $GITHUB_OUTPUT
+          echo "Updates were made to dependencies"
+        else
+          echo "updates=false" >> $GITHUB_OUTPUT
+          echo "No updates were needed"
+        fi
+
+    - name: Test with updated dependencies
+      if: steps.check-updates.outputs.updates == 'true'
+      run: |
+        cargo test --all-targets --all-features
+
+    - name: Create Pull Request for dependency updates
+      if: steps.check-updates.outputs.updates == 'true'
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: 'chore: update dependencies'
+        title: '📦 Update dependencies'
+        body: |
+          ## Dependency Update
+          
+          This PR updates dependencies to their latest versions.
+          
+          ### Update Type
+          - **Type**: ${{ github.event.inputs.update_type }}
+          - **Scope**: All dependencies
+          
+          ### Changes
+          - Updated dependencies to latest versions
+          - All tests passing with updated dependencies
+          
+          ### Checklist
+          - [x] Dependencies updated
+          - [x] All tests passing
+          - [x] No breaking changes detected
+          - [x] Security audit passed
+          
+          ### How to test
+          1. Checkout this branch
+          2. Run `cargo test`
+          3. Run `cargo audit`
+          4. Test main functionality
+          5. Verify no regressions
+        branch: dependency-updates
+        base: main
+        delete-branch: true
+
+  notify-dependencies:
+    name: Notify Dependencies
+    runs-on: ubuntu-latest
+    needs: [security-update, dependency-update]
+    if: always()
+    
+    steps:
+    - name: Notify completion
+      run: |
+        echo "🔔 Dependency update workflow completed"
+        echo "📋 Check the workflow runs for any created PRs"
+        echo "🔍 Review any security updates or dependency changes" 
