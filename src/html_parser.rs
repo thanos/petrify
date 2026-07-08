@@ -5,6 +5,7 @@ use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path};
 use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -34,7 +35,9 @@ impl HtmlParser {
         let mut resources = Vec::new();
         let mut modified_html = html_content.to_string();
 
-        let references = self.extract_url_references(&dom.document)?;
+        let mut references = self.extract_url_references(&dom.document)?;
+        references.sort_by(|a, b| b.original.len().cmp(&a.original.len()));
+
         let mut local_paths = HashMap::new();
 
         for reference in &references {
@@ -85,33 +88,14 @@ impl HtmlParser {
             NodeData::Element { ref attrs, .. } => {
                 for attr in attrs.borrow().iter() {
                     if self.is_url_attribute(&attr.name.local) {
-                        let url_str = attr.value.to_string();
-                        if let Ok(url) = self.resolve_url(&url_str) {
-                            let key = (url_str.clone(), url.to_string());
-                            if seen.insert(key) {
-                                references.push(UrlReference {
-                                    original: url_str,
-                                    resolved: url,
-                                });
-                            }
-                        }
+                        self.push_resolved_reference(&attr.value, references, seen);
+                    } else if self.is_css_attribute(&attr.name.local) {
+                        self.push_css_url_references(&attr.value, references, seen);
                     }
                 }
             }
             NodeData::Text { ref contents } => {
-                if let Some(urls_in_text) = self.extract_urls_from_text(&contents.borrow()) {
-                    for url_str in urls_in_text {
-                        if let Ok(url) = self.resolve_url(&url_str) {
-                            let key = (url_str.clone(), url.to_string());
-                            if seen.insert(key) {
-                                references.push(UrlReference {
-                                    original: url_str,
-                                    resolved: url,
-                                });
-                            }
-                        }
-                    }
-                }
+                self.push_css_url_references(&contents.borrow(), references, seen);
             }
             _ => {}
         }
@@ -121,6 +105,40 @@ impl HtmlParser {
         }
 
         Ok(())
+    }
+
+    fn push_resolved_reference(
+        &self,
+        url_str: &str,
+        references: &mut Vec<UrlReference>,
+        seen: &mut HashSet<(String, String)>,
+    ) {
+        if let Ok(url) = self.resolve_url(url_str) {
+            let key = (url_str.to_string(), url.to_string());
+            if seen.insert(key) {
+                references.push(UrlReference {
+                    original: url_str.to_string(),
+                    resolved: url,
+                });
+            }
+        }
+    }
+
+    fn push_css_url_references(
+        &self,
+        css: &str,
+        references: &mut Vec<UrlReference>,
+        seen: &mut HashSet<(String, String)>,
+    ) {
+        if let Some(urls) = self.extract_urls_from_css(css) {
+            for url_str in urls {
+                self.push_resolved_reference(&url_str, references, seen);
+            }
+        }
+    }
+
+    fn is_css_attribute(&self, attr_name: &str) -> bool {
+        attr_name == "style"
     }
 
     fn is_url_attribute(&self, attr_name: &str) -> bool {
@@ -137,7 +155,7 @@ impl HtmlParser {
         )
     }
 
-    fn extract_urls_from_text(&self, text: &str) -> Option<Vec<String>> {
+    fn extract_urls_from_css(&self, text: &str) -> Option<Vec<String>> {
         let mut urls = Vec::new();
 
         // Extract URLs from CSS @import statements
@@ -164,6 +182,10 @@ impl HtmlParser {
     }
 
     fn resolve_url(&self, url_str: &str) -> Result<Url> {
+        if url_str.trim().is_empty() {
+            return Err(anyhow!("Skipping empty URL"));
+        }
+
         if url_str.starts_with("data:") || url_str.starts_with("#") {
             return Err(anyhow!("Skipping data URL or fragment"));
         }
@@ -226,9 +248,8 @@ impl HtmlParser {
     }
 
     fn looks_like_html_page(&self, path: &str) -> bool {
-        // Skip empty paths and root
         if path.is_empty() || path == "/" {
-            return false;
+            return true;
         }
 
         // Check if the path ends with a slash (directory-like)
@@ -359,18 +380,91 @@ impl HtmlParser {
     }
 
     fn replace_url_in_html(&self, html: &str, original_url: &str, local_path: &str) -> String {
+        if original_url.is_empty() {
+            return html.to_string();
+        }
+
         let relative_path = self.make_relative_path(local_path);
-        html.replace(original_url, &relative_path)
+        let escaped = regex::escape(original_url);
+        let mut result = html.to_string();
+
+        const URL_ATTRS: &str =
+            "href|src|data-src|data-original|poster|background|data-srcset|data-lazy-src";
+
+        for (quote, end) in [("\"", "\""), ("'", "'")] {
+            let pattern = format!(r#"(?i)({URL_ATTRS})\s*=\s*{quote}{escaped}{end}"#);
+            if let Ok(re) = Regex::new(&pattern) {
+                result = re
+                    .replace_all(&result, |caps: &regex::Captures| {
+                        format!("{}={quote}{}{end}", &caps[1], relative_path)
+                    })
+                    .into_owned();
+            }
+        }
+
+        let url_pattern = format!(r#"url\(\s*['"]?{escaped}['"]?\s*\)"#);
+        if let Ok(re) = Regex::new(&url_pattern) {
+            result = re
+                .replace_all(&result, format!("url({relative_path})"))
+                .into_owned();
+        }
+
+        let import_pattern = format!(r#"@import\s+['"]{escaped}['"]"#);
+        if let Ok(re) = Regex::new(&import_pattern) {
+            result = re
+                .replace_all(&result, format!(r#"@import "{relative_path}""#))
+                .into_owned();
+        }
+
+        result
     }
 
-    fn make_relative_path(&self, local_path: &str) -> String {
-        // Convert absolute path to relative path from the HTML file location
-        if let Some(relative) = local_path.strip_prefix(&self.output_dir) {
-            relative.strip_prefix('/').unwrap_or(relative).to_string()
-        } else {
-            local_path.to_string()
-        }
+    fn make_relative_path(&self, target_local_path: &str) -> String {
+        let page_local_path = self
+            .generate_local_path(&self.base_url, &ResourceType::HTML)
+            .unwrap_or_else(|_| format!("{}/index.html", self.output_dir));
+
+        let from_dir = Path::new(&page_local_path)
+            .parent()
+            .unwrap_or_else(|| Path::new(&self.output_dir));
+
+        relative_path_between(from_dir, Path::new(target_local_path))
     }
+}
+
+fn relative_path_between(from_dir: &Path, to_path: &Path) -> String {
+    let from_parts = normalized_path_components(from_dir);
+    let to_parts = normalized_path_components(to_path);
+
+    let mut common = 0;
+    while common < from_parts.len()
+        && common < to_parts.len()
+        && from_parts[common] == to_parts[common]
+    {
+        common += 1;
+    }
+
+    let ups = from_parts.len().saturating_sub(common);
+    let mut result: Vec<String> = std::iter::repeat_n("..".to_string(), ups).collect();
+    result.extend(to_parts[common..].iter().cloned());
+
+    if result.is_empty() {
+        to_path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| ".".to_string())
+    } else {
+        result.join("/")
+    }
+}
+
+fn normalized_path_components(path: &Path) -> Vec<String> {
+    path.components()
+        .filter_map(|c| match c {
+            Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -442,6 +536,47 @@ mod tests {
     }
 
     #[test]
+    fn test_skips_empty_urls() {
+        let base_url = Url::parse("https://example.com/page/").unwrap();
+        let parser = HtmlParser::new(base_url, "./output".to_string());
+        assert!(parser.resolve_url("").is_err());
+        assert!(parser.resolve_url("   ").is_err());
+    }
+
+    #[test]
+    fn empty_src_attribute_does_not_corrupt_html() {
+        let html = r#"<html><body>
+            <img class="uk-invisible" src="" width="" height="" alt="">
+            <link rel="stylesheet" href="/static/app.css">
+        </body></html>"#;
+        let base_url = Url::parse("http://127.0.0.1:8000/2025-9-the-amphibian/").unwrap();
+        let parser = HtmlParser::new(base_url, "./mb".to_string());
+        let (modified, resources) = parser.parse_html(html).unwrap();
+
+        assert!(modified.contains("<!DOCTYPE html>") || modified.contains("<html>"));
+        assert!(!modified.contains("2025-9-the-amphibian/index.html<"));
+        assert!(modified.contains(r#"<img class="uk-invisible" src=""#));
+        assert!(resources.iter().any(|r| r.url.path().ends_with("app.css")));
+    }
+
+    #[test]
+    fn extracts_and_rewrites_background_image_in_style_attribute() {
+        let html = r#"<html><body>
+            <div style="background-image: url(/static/images/2025/hero.webp);"></div>
+        </body></html>"#;
+        let base_url = Url::parse("http://127.0.0.1:8000/2025-9-the-amphibian/").unwrap();
+        let parser = HtmlParser::new(base_url, "./mb".to_string());
+        let (modified, resources) = parser.parse_html(html).unwrap();
+
+        assert!(resources.iter().any(|r| {
+            r.resource_type == ResourceType::Image
+                && r.url.path().ends_with("hero.webp")
+        }));
+        assert!(modified.contains("url(../static/images/hero.webp)"));
+        assert!(!modified.contains("url(/static/images/2025/hero.webp)"));
+    }
+
+    #[test]
     fn extracts_urls_from_inline_css() {
         let html = r#"<html><head><style>
             @import "imported.css";
@@ -468,10 +603,34 @@ mod tests {
     }
 
     #[test]
-    fn make_relative_path_strips_output_prefix() {
+    fn root_href_does_not_corrupt_closing_tags() {
+        let html = r#"<html><head></head><body>
+            <a href="/">Home</a>
+            <p>Visit /other/path in text</p>
+            </body></html>"#;
+        let base_url = Url::parse("http://127.0.0.1:8000/2025-9-the-amphibian/").unwrap();
+        let parser = HtmlParser::new(base_url, "./mb".to_string());
+        let (modified, _) = parser.parse_html(html).unwrap();
+
+        assert!(modified.contains("</body>"));
+        assert!(modified.contains("</html>"));
+        assert!(modified.contains(r#"<a href="../index.html">Home</a>"#));
+        assert!(modified.contains("/other/path"));
+    }
+
+    #[test]
+    fn make_relative_path_from_page_to_asset() {
         let base_url = Url::parse("https://example.com/").unwrap();
         let parser = HtmlParser::new(base_url, "/output".to_string());
         let relative = parser.make_relative_path("/output/static/css/app.css");
         assert_eq!(relative, "static/css/app.css");
+    }
+
+    #[test]
+    fn make_relative_path_from_nested_page_to_root() {
+        let base_url = Url::parse("https://example.com/blog/post/").unwrap();
+        let parser = HtmlParser::new(base_url, "/output".to_string());
+        let relative = parser.make_relative_path("/output/index.html");
+        assert_eq!(relative, "../../index.html");
     }
 }
