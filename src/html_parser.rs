@@ -1,9 +1,9 @@
 use crate::paths;
 use crate::types::{Resource, ResourceType};
 use anyhow::{anyhow, Result};
-use html5ever::Attribute;
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
+use html5ever::Attribute;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -240,9 +240,9 @@ impl HtmlParser {
         seen: &mut HashSet<(String, String)>,
     ) {
         // Match common schema.org image-like string fields.
-        let Ok(re) = Regex::new(
-            r#""(?:image|thumbnailUrl|contentUrl|logo|photo)"\s*:\s*"([^"]+)""#,
-        ) else {
+        let Ok(re) =
+            Regex::new(r#""(?:image|thumbnailUrl|contentUrl|logo|photo)"\s*:\s*"([^"]+)""#)
+        else {
             return;
         };
         for cap in re.captures_iter(json) {
@@ -442,10 +442,7 @@ impl HtmlParser {
             }
         }
 
-        let mut local_path = format!(
-            "{}/{}/{}",
-            self.output_dir, subdirectory, unique_filename
-        );
+        let mut local_path = format!("{}/{}/{}", self.output_dir, subdirectory, unique_filename);
         if self.convert_to_webp && *resource_type == ResourceType::Image {
             local_path = paths::update_path_to_webp(&local_path);
         }
@@ -603,9 +600,7 @@ mod tests {
     fn absolute_path_with_fragment_keeps_fragment_out_of_path() {
         let base_url = Url::parse("http://127.0.0.1:8000/").unwrap();
         let parser = HtmlParser::new(base_url, "./mb".to_string(), false);
-        let resolved = parser
-            .resolve_url("/2025-9-the-amphibian/#home")
-            .unwrap();
+        let resolved = parser.resolve_url("/2025-9-the-amphibian/#home").unwrap();
         assert_eq!(resolved.path(), "/2025-9-the-amphibian/");
         assert_eq!(resolved.fragment(), Some("home"));
         assert!(!resolved.path().contains("%23"));
@@ -677,8 +672,12 @@ mod tests {
         let parser = HtmlParser::new(base_url, "./mb".to_string(), true);
         let (modified, resources) = parser.parse_html(html).unwrap();
 
-        assert!(resources.iter().any(|r| r.url.path().ends_with("cover.jpg")));
-        assert!(resources.iter().any(|r| r.url.path().ends_with("photo.png")));
+        assert!(resources
+            .iter()
+            .any(|r| r.url.path().ends_with("cover.jpg")));
+        assert!(resources
+            .iter()
+            .any(|r| r.url.path().ends_with("photo.png")));
         assert!(!resources.iter().any(|r| r.url.as_str().contains("/about")));
         assert!(modified.contains(r#"content="/static/images/cover.webp""#));
         assert!(modified.contains(r#""image":"/static/images/photo.webp""#));
@@ -728,8 +727,7 @@ mod tests {
         let (modified, resources) = parser.parse_html(html).unwrap();
 
         assert!(resources.iter().any(|r| {
-            r.resource_type == ResourceType::Image
-                && r.url.path().ends_with("hero.webp")
+            r.resource_type == ResourceType::Image && r.url.path().ends_with("hero.webp")
         }));
         assert!(modified.contains("url(/static/images/hero.webp)"));
         assert!(!modified.contains("url(/static/images/2025/hero.webp)"));

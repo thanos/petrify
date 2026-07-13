@@ -4,9 +4,7 @@ use petrify::types::ResourceType;
 #[test]
 fn default_download_only_includes_fonts_and_media() {
     let config = Config::new();
-    for expected in [
-        "js", "css", "images", "video", "html", "pdf", "fonts",
-    ] {
+    for expected in ["js", "css", "images", "video", "html", "pdf", "fonts"] {
         assert!(
             config.download_only.iter().any(|t| t == expected),
             "default download_only missing {expected}"

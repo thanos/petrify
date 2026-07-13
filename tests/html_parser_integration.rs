@@ -92,7 +92,9 @@ fn style_attribute_background_images_are_discovered_and_rewritten() {
     let parser = HtmlParser::new(base_url, "./mb".to_string(), false);
     let (modified, resources) = parser.parse_html(html).unwrap();
 
-    assert!(resources.iter().any(|r| r.url.path().ends_with("hero.webp")));
+    assert!(resources
+        .iter()
+        .any(|r| r.url.path().ends_with("hero.webp")));
     assert!(resources.iter().any(|r| r.url.path().ends_with("home.jpg")));
     assert!(modified.contains("url(/static/images/hero.webp)"));
     assert!(modified.contains("url(/static/images/home.jpg)"));
@@ -115,7 +117,9 @@ fn fragment_urls_are_rewritten_without_percent23_html_files() {
         .filter(|r| r.resource_type == ResourceType::HTML)
         .collect();
     assert_eq!(html_pages.len(), 1);
-    assert!(html_pages[0].local_path.ends_with("2025-9-the-amphibian/index.html"));
+    assert!(html_pages[0]
+        .local_path
+        .ends_with("2025-9-the-amphibian/index.html"));
     assert!(!html_pages[0].local_path.contains("%23"));
 
     assert!(modified.contains(r#"href="/2025-9-the-amphibian/index.html#home""#));
@@ -190,9 +194,9 @@ fn fonts_are_classified_as_font_resources() {
     assert!(resources.iter().any(|r| {
         r.resource_type == ResourceType::Font && r.url.path().ends_with("site.woff2")
     }));
-    assert!(resources.iter().any(|r| {
-        r.resource_type == ResourceType::Font && r.url.path().ends_with("brand.ttf")
-    }));
+    assert!(resources
+        .iter()
+        .any(|r| { r.resource_type == ResourceType::Font && r.url.path().ends_with("brand.ttf") }));
     assert!(modified.contains("/static/fonts/site.woff2"));
     assert!(modified.contains("url(/static/fonts/brand.ttf)"));
 }

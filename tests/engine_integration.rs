@@ -41,8 +41,11 @@ fn tiny_png() -> Vec<u8> {
 fn tiny_jpeg() -> Vec<u8> {
     let img = image::RgbImage::from_pixel(1, 1, image::Rgb([255, 0, 0]));
     let mut buf = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
-        .unwrap();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut buf),
+        image::ImageFormat::Jpeg,
+    )
+    .unwrap();
     buf
 }
 
@@ -217,7 +220,10 @@ async fn run_downloads_seo_meta_and_style_background_images() {
     assert!(!index_body.contains("%23"));
     assert!(!index_body.contains("//static/"));
     assert!(index_body.contains("</body>"));
-    assert!(index_body.contains(r#"src="""#), "empty src should be preserved");
+    assert!(
+        index_body.contains(r#"src="""#),
+        "empty src should be preserved"
+    );
 
     assert!(dir.path().join("out/static/images/og.webp").exists());
     assert!(dir.path().join("out/static/images/hero.webp").exists());
