@@ -1,6 +1,6 @@
 [package]
 name = "petrify"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.74"
 authors = ["Thanos Vassilakis <thanosv@gmail.com>"]
@@ -10,17 +10,20 @@ readme = "README.md"
 repository = "https://github.com/thanos/petrify"
 homepage = "https://github.com/thanos/petrify"
 documentation = "https://docs.rs/petrify"
-keywords = ["static", "website", "offline", "wget", "archive", "petrify"]
+keywords = ["static", "website", "offline", "wget", "archive", "mirror"]
 categories = ["command-line-utilities", "web-programming"]
 exclude = [
     "test_output/**",
     "example_output/**",
     "test_site/**",
+    "mb/**",
+    "coverage/**",
     "simple_test.html",
     "test_petrify.sh",
     ".github/**",
     "scripts/**",
     "GITHUB_ACTIONS.md",
+    ".tool-versions",
 ]
 
 [dependencies]
@@ -31,7 +34,7 @@ clap = { version = "4.4", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 html5ever = "0.26"
 markup5ever_rcdom = "0.2"
-anyhow = "1.0"
+anyhow = "1.0.103"
 indicatif = "0.18"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 webp = "0.3"

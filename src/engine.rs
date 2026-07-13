@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::html_parser::HtmlParser;
+use crate::paths::{normalize_output_dir, update_path_to_webp};
 use crate::types::{DownloadStats, Resource, ResourceType, WorkQueue};
 use anyhow::{anyhow, Result};
 use colored::*;
@@ -21,7 +22,9 @@ pub struct Petrifier {
 }
 
 impl Petrifier {
-    pub async fn new(config: Config) -> Result<Self> {
+    pub async fn new(mut config: Config) -> Result<Self> {
+        config.output = normalize_output_dir(&config.output);
+
         // Create output directories
         Self::create_output_directories(&config.output)?;
 
@@ -107,7 +110,11 @@ impl Petrifier {
 
             match self.download_page(&url).await {
                 Ok(html_content) => {
-                    let parser = HtmlParser::new(url.clone(), self.config.output.clone());
+                    let parser = HtmlParser::new(
+                        url.clone(),
+                        self.config.output.clone(),
+                        self.config.convert_to_webp,
+                    );
                     if let Ok((_, resources)) = parser.parse_html(&html_content) {
                         for resource in &resources {
                             if resource.resource_type == ResourceType::HTML {
@@ -229,7 +236,7 @@ impl Petrifier {
 
         // Parse HTML and extract resources
         let html_content_str = String::from_utf8(html_content)?;
-        let parser = HtmlParser::new(page_url.clone(), output_dir.clone());
+        let parser = HtmlParser::new(page_url.clone(), output_dir.clone(), config.convert_to_webp);
         let (modified_html, resources) = parser.parse_html(&html_content_str)?;
 
         // Save the modified HTML
@@ -383,7 +390,7 @@ impl Petrifier {
             ResourceType::Image if config.convert_to_webp => {
                 let webp_content = Self::convert_image_to_webp(&content, &config)?;
                 // Update path to .webp extension
-                let webp_path = Self::update_path_to_webp(&local_path)?;
+                let webp_path = update_path_to_webp(&local_path);
                 (webp_content, webp_path)
             }
             _ => (content.clone(), local_path.clone()),
@@ -476,26 +483,6 @@ impl Petrifier {
         };
 
         Ok(webp_data.to_vec())
-    }
-
-    fn update_path_to_webp(original_path: &str) -> Result<String> {
-        let normalized = original_path.replace('\\', "/");
-        let path = std::path::Path::new(&normalized);
-        if let Some(stem) = path.file_stem() {
-            let webp_filename = format!("{}.webp", stem.to_string_lossy());
-            if let Some(parent) = path.parent() {
-                let parent = parent.to_string_lossy();
-                if parent.is_empty() || parent == "." {
-                    Ok(webp_filename)
-                } else {
-                    Ok(format!("{}/{}", parent, webp_filename))
-                }
-            } else {
-                Ok(webp_filename)
-            }
-        } else {
-            Ok(normalized)
-        }
     }
 
     fn generate_page_path(url: &Url, output_dir: &str) -> Result<String> {
@@ -823,7 +810,7 @@ mod tests {
 
     #[test]
     fn update_path_to_webp_changes_extension() {
-        let updated = Petrifier::update_path_to_webp("/out/static/images/photo.png").unwrap();
+        let updated = crate::paths::update_path_to_webp("/out/static/images/photo.png");
         assert_eq!(updated, "/out/static/images/photo.webp");
     }
 

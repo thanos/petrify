@@ -27,6 +27,9 @@ target
 
 /target
 /coverage
+/mb
 test_output/
 example_output/
 simple_test.html
+.tool-versions
+/baoulo/

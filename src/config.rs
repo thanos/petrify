@@ -36,6 +36,7 @@ impl Config {
                 "video".to_string(),
                 "html".to_string(),
                 "pdf".to_string(),
+                "fonts".to_string(),
             ],
             max_concurrent: num_cpus::get(),
             output: "./petrified_site".to_string(),
