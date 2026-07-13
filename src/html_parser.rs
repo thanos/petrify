@@ -39,7 +39,7 @@ impl HtmlParser {
         let mut modified_html = html_content.to_string();
 
         let mut references = self.extract_url_references(&dom.document)?;
-        references.sort_by(|a, b| b.original.len().cmp(&a.original.len()));
+        references.sort_by_key(|b| std::cmp::Reverse(b.original.len()));
 
         let mut local_paths = HashMap::new();
 
