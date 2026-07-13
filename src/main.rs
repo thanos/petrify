@@ -24,7 +24,7 @@ struct Cli {
     #[arg(
         long,
         value_delimiter = ',',
-        default_value = "js,css,images,video,html,pdf"
+        default_value = "js,css,images,video,html,pdf,fonts"
     )]
     download_only: Vec<String>,
 

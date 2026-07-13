@@ -8,19 +8,19 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.74-blue)](Cargo.toml)
 
-Petrify is a command-line tool that downloads a website and produces a static copy suitable for offline browsing. It crawls HTML pages on the target host, extracts linked assets, rewrites URLs to local paths, and saves everything to disk.
+Petrify is a command-line tool that downloads a website and produces a static copy suitable for offline browsing or hosting behind a web server. It crawls HTML pages on the target host, extracts linked assets, rewrites URLs to site-root paths, and saves everything to disk.
 
-Petrify is similar in purpose to `wget --mirror`, with built-in link rewriting, concurrent downloads, and optional image conversion to WebP.
+Petrify is similar in purpose to `wget --mirror`, with built-in link rewriting, concurrent downloads, optional image conversion to WebP, and discovery of SEO / social metadata images.
 
 ## What Petrify does
 
 Given a starting URL, Petrify will:
 
 1. Discover HTML pages on the same host by following links.
-2. Download each page, parse it, and rewrite `href`, `src`, and related attributes to point at local files.
-3. Download referenced assets (CSS, JavaScript, images, and other file types you select).
-4. Optionally convert JPEG, PNG, and GIF images to WebP during download.
-5. Write a directory tree you can open in a browser without a network connection.
+2. Download each page, parse it, and rewrite `href`, `src`, `style` `url(...)`, SEO meta images, and related references to local site-root paths.
+3. Download referenced assets (CSS, JavaScript, images, fonts, video, PDF, and other selected types), including common off-host CDNs and object storage when linked from HTML.
+4. Optionally convert JPEG, PNG, and GIF images to WebP during download (HTML links are updated to match).
+5. Write a directory tree you can open locally or serve as a static site document root.
 
 Petrify does not execute JavaScript or render pages in a browser. It works from the HTML and asset URLs present in the source.
 
@@ -40,13 +40,18 @@ Petrify runs in four stages:
 
 During the scan phase, only pages on the same host as the starting URL are followed. For example, if you start at `https://example.com/`, pages on `https://other.com/` linked from the site are not added to the crawl queue.
 
-Asset URLs on the same host are always collected. Whether off-host assets are downloaded depends on your `--download-only` settings; see Limitations for notes on `--download-external`.
+Asset URLs (images, CSS, JS, fonts, and so on) may be collected from the starting host and from external hosts when they appear in HTML attributes, inline CSS, or SEO metadata. See Limitations for notes on `--download-external`.
 
 ### Link rewriting
 
-The HTML parser resolves relative URLs, absolute paths, absolute URLs, and protocol-relative URLs (`//cdn.example.com/...`). It reads URLs from common attributes (`src`, `href`, `data-src`, `poster`, and others) and from inline CSS (`@import` and `url(...)`).
+The HTML parser resolves relative URLs, absolute paths, absolute URLs, and protocol-relative URLs (`//cdn.example.com/...`). It reads URLs from:
 
-Original attribute values in the HTML are replaced with paths relative to the output directory so that saved pages load assets locally.
+- Common attributes (`src`, `href`, `data-src`, `poster`, and others)
+- Inline CSS (`@import` and `url(...)` in `<style>` and `style="…"`)
+- SEO / social metadata (`og:image`, `twitter:image`, and related `content` values)
+- JSON-LD image-like fields (`image`, `thumbnailUrl`, `contentUrl`, `logo`, `photo`)
+
+Rewritten links use **site-root paths** (for example `/static/images/logo.webp` and `/about/index.html`) so nested pages work when the output directory is served as a web server document root. URL fragments such as `#home` are preserved (`/page/index.html#home`).
 
 ## Installation
 
@@ -55,6 +60,10 @@ Original attribute values in the HTML are replaced with paths relative to the ou
 ```bash
 cargo install petrify
 ```
+
+### From GitHub Releases
+
+Prebuilt binaries for Linux, macOS, and Windows are attached to each [GitHub release](https://github.com/thanos/petrify/releases).
 
 ### From source
 
@@ -78,11 +87,21 @@ petrify https://example.com -o ./my_copy -m 4
 # Limit how many pages are scanned and processed (useful for testing)
 petrify https://example.com --max-pages 10
 
-# Download only HTML, CSS, JavaScript, and images
+# Narrow the asset types (fonts are included by default)
 petrify https://example.com --download-only html,css,js,images
 ```
 
-Open the output directory in a browser. The entry point is typically `index.html` at the root of the output path.
+### Serving the mirror
+
+Point a static file server at the output directory (the document root):
+
+```bash
+cd petrified_site
+python3 -m http.server 8000
+# open http://127.0.0.1:8000/
+```
+
+Because links are site-root absolute (`/static/...`), nested pages such as `/artfestival/artist/name/` resolve assets correctly.
 
 ## Command reference
 
@@ -95,7 +114,7 @@ petrify [OPTIONS] <URL>
 | `<URL>` | | Starting URL to crawl (required) | |
 | `--output` | `-o` | Directory for the static copy | `./petrified_site` |
 | `--max-concurrent` | `-m` | Number of concurrent download workers | CPU core count |
-| `--download-only` | | Comma-separated list of resource types to download | `js,css,images,video,html,pdf` |
+| `--download-only` | | Comma-separated list of resource types to download | `js,css,images,video,html,pdf,fonts` |
 | `--max-pages` | | Maximum pages to scan and process (`0` = no limit) | `0` |
 | `--depth` | `-d` | Maximum crawl depth | `unlimited` |
 | `--convert-to-webp` | | Convert JPEG, PNG, and GIF images to WebP | `true` |
@@ -124,10 +143,12 @@ The `--download-only` flag accepts these values:
 | `fonts` | Web fonts (`.woff`, `.woff2`, `.ttf`, `.otf`, `.eot`) |
 | `other` | Everything else |
 
-`fonts` is not included in the default list. Add it explicitly if you need web fonts:
+`fonts` is included in the default list. Meta / Open Graph / Twitter image URLs and JSON-LD image fields are discovered and rewritten when `images` is enabled.
+
+To exclude fonts:
 
 ```bash
-petrify https://example.com --download-only html,css,js,images,fonts
+petrify https://example.com --download-only html,css,js,images
 ```
 
 ### Page limit
@@ -136,7 +157,7 @@ petrify https://example.com --download-only html,css,js,images,fonts
 
 ### WebP conversion
 
-When `--convert-to-webp` is enabled (the default), JPEG, PNG, and GIF images are converted to WebP before being saved. The file extension in the output directory changes to `.webp`. Disable conversion to keep original image formats:
+When `--convert-to-webp` is enabled (the default), JPEG, PNG, and GIF images are converted to WebP before being saved. The file extension in the output directory changes to `.webp`, and HTML references are rewritten to match. Disable conversion to keep original image formats:
 
 ```bash
 petrify https://example.com --convert-to-webp false
@@ -144,7 +165,7 @@ petrify https://example.com --convert-to-webp false
 
 ## Output layout
 
-Petrify writes HTML pages at the root of the output directory, preserving URL structure where possible. Assets are stored under `static/` by type.
+Petrify writes HTML pages under the output directory, preserving URL structure where possible. Assets are stored under `static/` by type.
 
 ```
 petrified_site/
@@ -165,14 +186,14 @@ petrified_site/
 
 Path mapping examples:
 
-| URL | Output file |
-|-----|-------------|
-| `https://example.com/` | `index.html` |
-| `https://example.com/about` | `about.html` |
-| `https://example.com/about.html` | `about.html` |
-| `https://example.com/docs/` | `docs/index.html` |
-| `https://example.com/static/app.css` | `static/css/app.css` |
-| `https://example.com/logo.png` | `static/images/logo.png` (or `logo.webp` if conversion is on) |
+| URL | Output file | Rewritten link |
+|-----|-------------|----------------|
+| `https://example.com/` | `index.html` | `/index.html` |
+| `https://example.com/about` | `about.html` | `/about.html` |
+| `https://example.com/docs/` | `docs/index.html` | `/docs/index.html` |
+| `https://example.com/docs/#intro` | `docs/index.html` | `/docs/index.html#intro` |
+| `https://example.com/static/app.css` | `static/css/app.css` | `/static/css/app.css` |
+| `https://example.com/logo.png` | `static/images/logo.webp` (if conversion is on) | `/static/images/logo.webp` |
 
 ## Examples
 
@@ -181,7 +202,7 @@ Path mapping examples:
 ```bash
 petrify https://docs.example.com \
   -o ./docs_offline \
-  --download-only html,css,js,images \
+  --download-only html,css,js,images,fonts \
   -m 4
 ```
 
@@ -250,11 +271,11 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all
 ```
 
-Integration tests use the fixture in `test_site/`. End-to-end tests use a local HTTP mock server (wiremock).
+Integration tests use the fixture in `test_site/` and a local HTTP mock server ([wiremock](https://crates.io/crates/wiremock)).
 
 ### Coverage
 
-CI runs tests with [tarpaulin](https://github.com/xd009642/tarpaulin) and uploads results to Coveralls. To run coverage locally on Linux:
+CI runs tests with [tarpaulin](https://xd009642.github.io/tarpaulin/) and uploads results to Coveralls. To run coverage locally on Linux:
 
 ```bash
 cargo install cargo-tarpaulin
@@ -271,6 +292,19 @@ On macOS, [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) is a pract
 
 This script builds the release binary and runs petrify against a few public URLs. It requires network access.
 
+### Release
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes. Tagging `v*` on the default branch triggers GitHub Actions to build binaries, create a GitHub release, and publish to crates.io (requires the `CRATES_IO_TOKEN` repository secret).
+
+```bash
+# After merging release-ready changes to main:
+# 1. Ensure version in Cargo.toml matches the tag (e.g. 0.2.0)
+# 2. Commit CHANGELOG + version bump
+# 3. Tag and push
+git tag -a v0.2.0 -m "Release 0.2.0"
+git push origin v0.2.0
+```
+
 ## Limitations
 
 Petrify produces a static snapshot. It has the following constraints:
@@ -278,10 +312,15 @@ Petrify produces a static snapshot. It has the following constraints:
 - **No JavaScript rendering.** Content loaded or modified only by client-side JavaScript after page load will not appear in the output. Single-page applications may not archive completely.
 - **Same-host crawling.** The scan phase only follows links to pages on the same host as the starting URL.
 - **Depth not enforced.** `--depth` is accepted on the command line but is not currently applied during crawling.
-- **External resources.** `--download-external` is accepted but not fully enforced. Off-host assets referenced in HTML may still be queued depending on how they are linked.
+- **External resources.** `--download-external` is accepted but not fully enforced as a hard gate. Off-host assets referenced in HTML may still be queued depending on how they are linked.
 - **robots.txt.** `--ignore-robots` is accepted but robots.txt is not fetched or checked. Use Petrify only on sites you are permitted to copy.
 - **HTTP errors.** Failed downloads are logged and skipped. The run continues; the output may contain broken references where a resource could not be fetched.
+- **CSS-linked fonts.** Fonts referenced only from downloaded CSS files (not from HTML) are not yet crawled as a second pass.
 - **Scale.** Large sites require significant time, bandwidth, and disk space. Use `--max-pages` to test on a subset first.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full history. Latest release: **0.2.0**.
 
 ## License
 

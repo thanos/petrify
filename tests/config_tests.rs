@@ -2,13 +2,26 @@ use petrify::config::Config;
 use petrify::types::ResourceType;
 
 #[test]
+fn default_download_only_includes_fonts_and_media() {
+    let config = Config::new();
+    for expected in [
+        "js", "css", "images", "video", "html", "pdf", "fonts",
+    ] {
+        assert!(
+            config.download_only.iter().any(|t| t == expected),
+            "default download_only missing {expected}"
+        );
+    }
+}
+
+#[test]
 fn should_download_matches_cli_filter_names() {
     let config = Config::new();
 
     assert!(config.should_download_type(&ResourceType::JavaScript));
     assert!(config.should_download_type(&ResourceType::CSS));
     assert!(config.should_download_type(&ResourceType::Image));
-    assert!(!config.should_download_type(&ResourceType::Font));
+    assert!(config.should_download_type(&ResourceType::Font));
 }
 
 #[test]
