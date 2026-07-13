@@ -10,7 +10,7 @@ readme = "README.md"
 repository = "https://github.com/thanos/petrify"
 homepage = "https://github.com/thanos/petrify"
 documentation = "https://docs.rs/petrify"
-keywords = ["static", "website", "offline", "wget", "archive", "mirror"]
+keywords = ["static-generator", "website",  "wget", "archive", "mirror"]
 categories = ["command-line-utilities", "web-programming"]
 exclude = [
     "test_output/**",
