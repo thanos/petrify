@@ -47,7 +47,33 @@ fn max_pages_limit_helpers() {
 fn depth_limit_parsing() {
     let mut config = Config::new();
     assert_eq!(config.get_depth_limit(), None);
+    assert!(config.allows_depth(99));
 
     config.depth = "3".to_string();
     assert_eq!(config.get_depth_limit(), Some(3));
+    assert!(config.allows_depth(0));
+    assert!(config.allows_depth(3));
+    assert!(!config.allows_depth(4));
+}
+
+#[test]
+fn stay_on_site_rejects_off_host_urls() {
+    let mut config = Config::new();
+    let base = url::Url::parse("https://example.com/").unwrap();
+    let same = url::Url::parse("https://example.com/static/a.png").unwrap();
+    let other = url::Url::parse("https://cdn.example.com/a.png").unwrap();
+    let other_page = url::Url::parse("https://cdn.example.com/about").unwrap();
+
+    assert!(config.allows_url(&same, &base));
+    assert!(config.allows_url(&other, &base));
+    assert!(config.allows_resource(&other, &base, &ResourceType::Image));
+    assert!(
+        !config.allows_resource(&other_page, &base, &ResourceType::HTML),
+        "off-site HTML pages must never be mirrored"
+    );
+
+    config.download_external = false;
+    assert!(config.allows_url(&same, &base));
+    assert!(!config.allows_url(&other, &base));
+    assert!(!config.allows_resource(&other, &base, &ResourceType::Image));
 }

@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Discovery of CSS `url(...)` values inside HTML `style` attributes (for example UIkit cover backgrounds).
 - Site-root URL rewriting for hosted mirrors: assets and pages rewrite to paths like `/static/images/logo.webp` and `/about/index.html` so the output works behind a normal web server document root.
 - Shared `paths` helpers for output-dir normalization, site-root paths, and WebP filename updates.
+- `--deep` to crawl the whole same-host site with unlimited depth.
+- `--stay-on-site` (alias `--stay-on-same-domain`) to skip third-party / CDN assets.
+- Crawl `--depth` is now enforced (`0` = starting page only).
+- Off-site HTML pages are never mirrored or rewritten; off-site assets (images, documents, CSS, JS, fonts, video/audio, other) remain downloadable when external downloads are enabled.
+- Document extensions beyond PDF (`.doc`, `.docx`, `.epub`, spreadsheets, etc.) are classified under the `pdf` download filter.
 
 ### Fixed
 
@@ -25,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - URL fragments (`#home`, `#program`) are preserved on rewrite instead of becoming `%23….html` paths.
 - When WebP conversion is enabled, rewritten HTML links use `.webp` paths that match the files written to disk.
 - Absolute path resolution uses `Url::join` so fragments and queries are not treated as path segments.
+- `--download-external=false` / `--stay-on-site` now hard-gates off-host asset downloads.
 
 ### Changed
 

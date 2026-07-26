@@ -256,6 +256,72 @@ async fn run_downloads_fonts_by_default() {
 }
 
 #[tokio::test]
+async fn run_respects_depth_zero_starting_page_only() {
+    let server = MockServer::start().await;
+    mount_test_site(&server).await;
+
+    let dir = TempDir::new().unwrap();
+    let output = dir.path().join("out").to_string_lossy().to_string();
+    let mut config = test_config(&server.uri(), &output);
+    config.depth = "0".to_string();
+
+    let mut petrifier = Petrifier::new(config).await.unwrap();
+    petrifier.run().await.unwrap();
+
+    assert!(dir.path().join("out/index.html").exists());
+    assert!(
+        !dir.path().join("out/about.html").exists(),
+        "depth 0 must not follow links to about.html"
+    );
+}
+
+#[tokio::test]
+async fn run_deep_unlimited_follows_linked_pages() {
+    let server = MockServer::start().await;
+    mount_test_site(&server).await;
+
+    let dir = TempDir::new().unwrap();
+    let output = dir.path().join("out").to_string_lossy().to_string();
+    let mut config = test_config(&server.uri(), &output);
+    config.depth = "unlimited".to_string();
+
+    let mut petrifier = Petrifier::new(config).await.unwrap();
+    petrifier.run().await.unwrap();
+
+    assert!(dir.path().join("out/index.html").exists());
+    assert!(dir.path().join("out/about.html").exists());
+}
+
+#[tokio::test]
+async fn run_stay_on_site_skips_third_party_assets() {
+    let server = MockServer::start().await;
+    mount_test_site(&server).await;
+
+    let dir = TempDir::new().unwrap();
+    let output = dir.path().join("out").to_string_lossy().to_string();
+    let mut config = test_config(&server.uri(), &output);
+    config.download_external = false;
+    config.convert_to_webp = true;
+    config.download_only = vec!["html".to_string(), "images".to_string(), "css".to_string()];
+
+    let mut petrifier = Petrifier::new(config).await.unwrap();
+    petrifier.run().await.unwrap();
+
+    assert!(dir.path().join("out/about.html").exists());
+    // Same-host assets still download
+    assert!(dir.path().join("out/static/images/logo.webp").exists());
+    // Third-party CDN image from about.html must not be fetched
+    let about_body = fs::read_to_string(dir.path().join("out/about.html")).unwrap();
+    assert!(
+        about_body.contains("cdn.example.com/remote.png")
+            || !dir.path().join("out/static/images/remote.webp").exists(),
+        "off-site CDN assets must not be downloaded when stay-on-site"
+    );
+    assert!(!dir.path().join("out/static/images/remote.webp").exists());
+    assert!(!dir.path().join("out/static/images/remote.png").exists());
+}
+
+#[tokio::test]
 async fn run_mirrors_absolute_same_host_images_as_site_root_webp() {
     let server = MockServer::start().await;
 

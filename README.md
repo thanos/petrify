@@ -40,7 +40,7 @@ Petrify runs in four stages:
 
 During the scan phase, only pages on the same host as the starting URL are followed. For example, if you start at `https://example.com/`, pages on `https://other.com/` linked from the site are not added to the crawl queue.
 
-Asset URLs (images, CSS, JS, fonts, and so on) may be collected from the starting host and from external hosts when they appear in HTML attributes, inline CSS, or SEO metadata. See Limitations for notes on `--download-external`.
+Asset URLs (images, CSS, JS, fonts, documents, and so on) may be collected from the starting host and from external hosts when they appear in HTML attributes, inline CSS, or SEO metadata. Off-site HTML page links are left as absolute URLs and are not mirrored. Pass `--stay-on-site` (or `--download-external=false`) to skip all third-party assets.
 
 ### Link rewriting
 
@@ -87,6 +87,15 @@ petrify https://example.com -o ./my_copy -m 4
 # Limit how many pages are scanned and processed (useful for testing)
 petrify https://example.com --max-pages 10
 
+# Deep crawl of the whole same-host site
+petrify https://example.com --deep -o ./mirror
+
+# Starting page only (no linked pages)
+petrify https://example.com --depth 0 -o ./single
+
+# Stay on the starting host (skip CDN / third-party assets)
+petrify https://example.com --stay-on-site -o ./mirror
+
 # Narrow the asset types (fonts are included by default)
 petrify https://example.com --download-only html,css,js,images
 ```
@@ -116,11 +125,13 @@ petrify [OPTIONS] <URL>
 | `--max-concurrent` | `-m` | Number of concurrent download workers | CPU core count |
 | `--download-only` | | Comma-separated list of resource types to download | `js,css,images,video,html,pdf,fonts` |
 | `--max-pages` | | Maximum pages to scan and process (`0` = no limit) | `0` |
-| `--depth` | `-d` | Maximum crawl depth | `unlimited` |
+| `--depth` | `-d` | Maximum crawl depth (`0` = starting page only) | `unlimited` |
+| `--deep` | | Crawl the whole same-host site (unlimited depth) | off |
 | `--convert-to-webp` | | Convert JPEG, PNG, and GIF images to WebP | `true` |
 | `--webp-quality` | | WebP quality when lossy compression is used (1 to 100) | `75` |
 | `--webp-lossless` | | Use lossless WebP compression instead of quality setting | `false` |
-| `--download-external` | | Download resources from external hosts | `true` |
+| `--download-external` | | Download resources from external hosts (`true`/`false`) | `true` |
+| `--stay-on-site` | | Only download pages and assets from the starting host | off |
 | `--ignore-robots` | `-i` | Ignore robots.txt restrictions | `true` |
 | `--timeout` | | HTTP request timeout in seconds | `270` |
 | `--help` | `-h` | Print help | |
@@ -134,16 +145,18 @@ The `--download-only` flag accepts these values:
 
 | Value | File types |
 |-------|------------|
-| `html` | HTML pages (`.html`, `.htm`, extensionless paths treated as pages) |
+| `html` | HTML pages on the starting host (`.html`, `.htm`, extensionless paths treated as pages). Off-site HTML is never mirrored. |
 | `css` | Stylesheets |
-| `js` | JavaScript |
-| `images` | Images (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.svg`, `.ico`, and related) |
-| `video` | Video (`.mp4`, `.webm`, `.ogg`, `.avi`, `.mov`, and related) |
-| `pdf` | PDF documents |
+| `js` | JavaScript (`.js`, `.mjs`) |
+| `images` | Images (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.svg`, `.ico`, `.avif`, and related) |
+| `video` | Video and audio (`.mp4`, `.webm`, `.mov`, `.mp3`, `.wav`, `.m4a`, and related) |
+| `pdf` | Documents (`.pdf`, `.doc`, `.docx`, `.odt`, `.rtf`, `.epub`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.csv`, `.txt`) |
 | `fonts` | Web fonts (`.woff`, `.woff2`, `.ttf`, `.otf`, `.eot`) |
-| `other` | Everything else |
+| `other` | Everything else (for example `.wasm`, `.zip`, `.json` data files) |
 
 `fonts` is included in the default list. Meta / Open Graph / Twitter image URLs and JSON-LD image fields are discovered and rewritten when `images` is enabled.
+
+**Off-site policy:** third-party *pages* keep their absolute URLs. Third-party *assets* (images, documents, CSS, JS, fonts, video/audio, and `other`) may still be downloaded when `--download-external` is enabled (the default). Use `--stay-on-site` to skip all third-party downloads.
 
 To exclude fonts:
 
@@ -310,13 +323,13 @@ git push origin v0.2.0
 Petrify produces a static snapshot. It has the following constraints:
 
 - **No JavaScript rendering.** Content loaded or modified only by client-side JavaScript after page load will not appear in the output. Single-page applications may not archive completely.
-- **Same-host crawling.** The scan phase only follows links to pages on the same host as the starting URL.
-- **Depth not enforced.** `--depth` is accepted on the command line but is not currently applied during crawling.
-- **External resources.** `--download-external` is accepted but not fully enforced as a hard gate. Off-host assets referenced in HTML may still be queued depending on how they are linked.
+- **Same-host page crawling.** The scan phase only follows HTML links to pages on the same host as the starting URL.
+- **Depth.** `--depth N` limits how far link-following goes (`0` = starting page only). `--deep` forces unlimited depth. Default is `unlimited`.
+- **External assets.** By default, off-host *assets* (images, documents, CSS, JS, fonts, video/audio, other binaries) may be downloaded and rewritten. Off-host *HTML pages* are never mirrored; their links stay absolute. Use `--stay-on-site` to skip all third-party downloads.
 - **robots.txt.** `--ignore-robots` is accepted but robots.txt is not fetched or checked. Use Petrify only on sites you are permitted to copy.
 - **HTTP errors.** Failed downloads are logged and skipped. The run continues; the output may contain broken references where a resource could not be fetched.
 - **CSS-linked fonts.** Fonts referenced only from downloaded CSS files (not from HTML) are not yet crawled as a second pass.
-- **Scale.** Large sites require significant time, bandwidth, and disk space. Use `--max-pages` to test on a subset first.
+- **Scale.** Large sites require significant time, bandwidth, and disk space. Use `--max-pages` or `--depth` to test on a subset first.
 
 ## Changelog
 

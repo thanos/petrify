@@ -49,9 +49,13 @@ impl HtmlParser {
                 continue;
             }
             match self.create_resource(&reference.resolved) {
-                Ok(resource) => {
+                Ok(Some(resource)) => {
                     local_paths.insert(lookup_key, resource.local_path.clone());
                     resources.push(resource);
+                }
+                Ok(None) => {
+                    // Off-site HTML (and other non-mirrorable refs): leave the
+                    // original URL untouched in the rewritten page.
                 }
                 Err(e) => {
                     log::warn!(
@@ -306,22 +310,32 @@ impl HtmlParser {
         stripped.to_string()
     }
 
-    fn create_resource(&self, url: &Url) -> Result<Resource> {
+    fn create_resource(&self, url: &Url) -> Result<Option<Resource>> {
         // Fragments are client-side only; local paths must ignore them.
         let mut url_for_path = url.clone();
         url_for_path.set_fragment(None);
 
         let resource_type = self.determine_resource_type(&url_for_path);
+
+        // Never mirror off-site HTML pages — keep the original absolute link.
+        if !self.is_same_host(&url_for_path) && !resource_type.is_offsite_mirrorable_asset() {
+            return Ok(None);
+        }
+
         let local_path = self.generate_local_path(&url_for_path, &resource_type)?;
 
-        Ok(Resource {
+        Ok(Some(Resource {
             url: url_for_path,
             local_path,
             resource_type: resource_type.clone(),
             mime_type: self.guess_mime_type(url, &resource_type),
             size: None,
             downloaded: false,
-        })
+        }))
+    }
+
+    fn is_same_host(&self, url: &Url) -> bool {
+        url.host_str() == self.base_url.host_str()
     }
 
     fn determine_resource_type(&self, url: &Url) -> ResourceType {
@@ -332,12 +346,14 @@ impl HtmlParser {
         match extension.as_str() {
             "html" | "htm" => ResourceType::HTML,
             "css" => ResourceType::CSS,
-            "js" | "javascript" => ResourceType::JavaScript,
-            "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "ico" | "bmp" | "tiff" | "tif" => {
-                ResourceType::Image
-            }
-            "mp4" | "webm" | "ogg" | "avi" | "mov" | "m4v" => ResourceType::Video,
-            "pdf" => ResourceType::PDF,
+            "js" | "javascript" | "mjs" => ResourceType::JavaScript,
+            "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "ico" | "bmp" | "tiff" | "tif"
+            | "avif" => ResourceType::Image,
+            "mp4" | "webm" | "ogg" | "avi" | "mov" | "m4v" | "mp3" | "wav" | "m4a" | "aac"
+            | "flac" | "opus" => ResourceType::Video,
+            // Documents: PDF plus common office / text downloads
+            "pdf" | "doc" | "docx" | "odt" | "rtf" | "epub" | "xls" | "xlsx" | "ppt" | "pptx"
+            | "csv" | "txt" => ResourceType::PDF,
             "woff" | "woff2" | "ttf" | "otf" | "eot" => ResourceType::Font,
             _ => {
                 // For URLs without extensions, check if they look like HTML pages

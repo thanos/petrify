@@ -12,9 +12,13 @@ struct Cli {
     #[arg(required = true)]
     url: String,
 
-    /// Maximum crawling depth
+    /// Maximum crawling depth (`0` = starting page only, `unlimited` = whole site)
     #[arg(short, long, default_value = "unlimited")]
     depth: String,
+
+    /// Crawl the whole same-host site with unlimited depth
+    #[arg(long)]
+    deep: bool,
 
     /// Maximum number of pages to scan and process (for testing)
     #[arg(long, default_value_t = 0)]
@@ -36,9 +40,13 @@ struct Cli {
     #[arg(short, long, default_value = "./petrified_site")]
     output: String,
 
-    /// Download external resources
-    #[arg(long, default_value_t = true)]
+    /// Download assets from third-party hosts (default: true)
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     download_external: bool,
+
+    /// Only download pages and assets from the starting host
+    #[arg(long, alias = "stay-on-same-domain")]
+    stay_on_site: bool,
 
     /// Convert JPEG/PNG images to WebP format
     #[arg(long, default_value_t = true)]
@@ -71,14 +79,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Target URL: {}", cli.url);
     info!("Output directory: {}", cli.output);
 
+    let depth = if cli.deep {
+        "unlimited".to_string()
+    } else {
+        cli.depth
+    };
+    let download_external = cli.download_external && !cli.stay_on_site;
+
     let config = Config {
         url: cli.url,
-        depth: cli.depth,
+        depth,
         max_pages: cli.max_pages,
         download_only: cli.download_only,
         max_concurrent: cli.max_concurrent,
         output: cli.output,
-        download_external: cli.download_external,
+        download_external,
         convert_to_webp: cli.convert_to_webp,
         webp_quality: cli.webp_quality,
         webp_lossless: cli.webp_lossless,

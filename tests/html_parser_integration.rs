@@ -200,3 +200,43 @@ fn fonts_are_classified_as_font_resources() {
     assert!(modified.contains("/static/fonts/site.woff2"));
     assert!(modified.contains("url(/static/fonts/brand.ttf)"));
 }
+
+#[test]
+fn offsite_html_links_are_left_absolute_while_assets_are_mirrored() {
+    let html = r#"<html><body>
+        <a href="https://other.example/about">About</a>
+        <a href="https://other.example/docs/guide.html">Guide</a>
+        <a href="https://cdn.example/lib.js">script link</a>
+        <img src="https://cdn.example/photo.png" alt="">
+        <link rel="stylesheet" href="https://cdn.example/theme.css">
+        <script src="https://cdn.example/app.js"></script>
+        <a href="https://cdn.example/report.pdf">PDF</a>
+        <a href="https://cdn.example/notes.docx">Doc</a>
+    </body></html>"#;
+    let base_url = Url::parse("http://127.0.0.1:8001/bio/").unwrap();
+    let parser = HtmlParser::new(base_url, "./venieri".to_string(), true);
+    let (modified, resources) = parser.parse_html(html).unwrap();
+
+    assert!(
+        !resources
+            .iter()
+            .any(|r| r.resource_type == ResourceType::HTML),
+        "off-site HTML pages must not be queued"
+    );
+    assert!(resources
+        .iter()
+        .any(|r| r.resource_type == ResourceType::Image));
+    assert!(resources.iter().any(|r| r.resource_type == ResourceType::CSS));
+    assert!(resources
+        .iter()
+        .any(|r| r.resource_type == ResourceType::JavaScript));
+    assert!(resources.iter().any(|r| r.resource_type == ResourceType::PDF));
+
+    assert!(modified.contains(r#"href="https://other.example/about""#));
+    assert!(modified.contains(r#"href="https://other.example/docs/guide.html""#));
+    assert!(modified.contains(r#"src="/static/images/photo.webp""#));
+    assert!(modified.contains(r#"href="/static/css/theme.css""#));
+    assert!(modified.contains(r#"src="/static/js/app.js""#));
+    assert!(modified.contains(r#"href="/static/pdf/report.pdf""#));
+    assert!(modified.contains(r#"href="/static/pdf/notes.docx""#));
+}

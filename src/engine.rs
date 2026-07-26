@@ -73,7 +73,8 @@ impl Petrifier {
         info!("Scanning site to discover all pages...");
 
         let mut visited = HashMap::new();
-        let mut to_visit = vec![base_url.clone()];
+        // (url, depth) — starting page is depth 0
+        let mut to_visit = vec![(base_url.clone(), 0usize)];
         let mut discovered_pages = 0;
         let mut discovered_resources = 0;
 
@@ -81,9 +82,17 @@ impl Petrifier {
         let scan_progress = self.multi_progress.add(ProgressBar::new_spinner());
         scan_progress.set_message("🔍 Scanning site for pages and resources...");
 
-        while let Some(url) = to_visit.pop() {
+        while let Some((url, depth)) = to_visit.pop() {
             let normalized = self.normalize_url(&url);
             if visited.contains_key(&normalized) {
+                continue;
+            }
+
+            if !self.config.allows_depth(depth) {
+                continue;
+            }
+
+            if !self.is_same_domain(&url, base_url) {
                 continue;
             }
 
@@ -104,10 +113,6 @@ impl Petrifier {
                 break;
             }
 
-            if !self.is_same_domain(&url, base_url) {
-                continue;
-            }
-
             match self.download_page(&url).await {
                 Ok(html_content) => {
                     let parser = HtmlParser::new(
@@ -119,8 +124,15 @@ impl Petrifier {
                         for resource in &resources {
                             if resource.resource_type == ResourceType::HTML {
                                 let page_url = resource.url.clone();
+                                if !self.is_same_domain(&page_url, base_url) {
+                                    continue;
+                                }
+                                let child_depth = depth + 1;
+                                if !self.config.allows_depth(child_depth) {
+                                    continue;
+                                }
                                 if !visited.contains_key(&self.normalize_url(&page_url)) {
-                                    to_visit.push(page_url.clone());
+                                    to_visit.push((page_url.clone(), child_depth));
                                     let mut queue = self.work_queue.lock().unwrap();
                                     queue.add_page(page_url);
                                 }
@@ -130,7 +142,13 @@ impl Petrifier {
                         {
                             let mut queue = self.work_queue.lock().unwrap();
                             for resource in &resources {
-                                if resource.resource_type != ResourceType::HTML {
+                                if resource.resource_type != ResourceType::HTML
+                                    && self.config.allows_resource(
+                                        &resource.url,
+                                        base_url,
+                                        &resource.resource_type,
+                                    )
+                                {
                                     queue.add_resource(resource.url.clone());
                                 }
                             }
@@ -244,11 +262,17 @@ impl Petrifier {
         Self::ensure_directory_exists(&page_path)?;
         fs::write(&page_path, modified_html)?;
 
-        // Add resources to the work queue
+        // Add asset resources to the work queue (never off-site HTML pages)
+        let base_url = Url::parse(&config.url)?;
         {
             let mut queue = work_queue.lock().unwrap();
             for resource in resources {
-                queue.add_resource(resource.url);
+                if resource.resource_type == ResourceType::HTML {
+                    continue;
+                }
+                if config.allows_resource(&resource.url, &base_url, &resource.resource_type) {
+                    queue.add_resource(resource.url);
+                }
             }
         }
 
@@ -276,10 +300,17 @@ impl Petrifier {
             stats.total_resources = resources.len();
         }
 
-        // Group resources by type
+        // Group resources by type (drop off-site HTML; honor stay-on-site)
+        let base_url = Url::parse(&self.config.url)?;
         let mut resources_by_type: HashMap<ResourceType, Vec<Url>> = HashMap::new();
         for url in resources {
             let resource_type = Self::determine_resource_type(&url);
+            if !self
+                .config
+                .allows_resource(&url, &base_url, &resource_type)
+            {
+                continue;
+            }
             resources_by_type
                 .entry(resource_type)
                 .or_default()
@@ -597,10 +628,12 @@ impl Petrifier {
         match extension.as_str() {
             "html" | "htm" => ResourceType::HTML,
             "css" => ResourceType::CSS,
-            "js" => ResourceType::JavaScript,
-            "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "ico" => ResourceType::Image,
-            "mp4" | "webm" | "ogg" | "avi" | "mov" => ResourceType::Video,
-            "pdf" => ResourceType::PDF,
+            "js" | "mjs" => ResourceType::JavaScript,
+            "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "ico" | "avif" => ResourceType::Image,
+            "mp4" | "webm" | "ogg" | "avi" | "mov" | "m4v" | "mp3" | "wav" | "m4a" | "aac"
+            | "flac" | "opus" => ResourceType::Video,
+            "pdf" | "doc" | "docx" | "odt" | "rtf" | "epub" | "xls" | "xlsx" | "ppt" | "pptx"
+            | "csv" | "txt" => ResourceType::PDF,
             "woff" | "woff2" | "ttf" | "otf" | "eot" => ResourceType::Font,
             _ => ResourceType::Other,
         }

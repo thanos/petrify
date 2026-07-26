@@ -34,6 +34,21 @@ impl ResourceType {
             ResourceType::Other => "other",
         }
     }
+
+    /// Asset types that may be fetched from a third-party host.
+    /// Off-site HTML pages are never mirrored.
+    pub fn is_offsite_mirrorable_asset(&self) -> bool {
+        matches!(
+            self,
+            ResourceType::CSS
+                | ResourceType::JavaScript
+                | ResourceType::Image
+                | ResourceType::Video
+                | ResourceType::PDF
+                | ResourceType::Font
+                | ResourceType::Other
+        )
+    }
 }
 
 impl From<&str> for ResourceType {
